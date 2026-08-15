@@ -23,7 +23,7 @@ body = re.search(r'<body[^>]*>(.*)</body>', html, re.S).group(1)
 body = re.sub(r'\s*<script\s+src="[^"]*"></script>', '', body)
 
 scripts = []
-for name in ('sounds.js', 'engine.js', 'sound.js', 'app.js'):
+for name in ('sounds.js', 'engine.js', 'sound.js', 'net.js', 'app.js'):
     js = (ROOT / name).read_text(encoding='utf-8')
     if '</script' in js:
         raise SystemExit(f'{name} contains </script> and cannot be inlined')

@@ -21,7 +21,7 @@ OUT = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else \
 
 SDK_TAG = ('<script src="https://sdk.crazygames.com/'
            'crazygames-sdk-v3.js"></script>\n')
-FILES = ('sounds.js', 'engine.js', 'sound.js', 'app.js')
+FILES = ('sounds.js', 'engine.js', 'sound.js', 'net.js', 'app.js')
 
 html = (ROOT / 'index.html').read_text(encoding='utf-8')
 anchor = '<script src="sounds.js'

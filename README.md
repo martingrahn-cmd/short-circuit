@@ -21,9 +21,15 @@ now a game of its own.
 - **Welded conductors** — gold cells are fixed in place and must be on the
   route, so late boards are built between given anchors instead of freely.
 - **Teaching lock** — the first lock anyone plays runs a crawling current.
+- **Live Duel** — realtime 1v1 on identical boards, first to three rounds,
+  joined by a 4-char room code. The twist: solving is not enough — only
+  **slamming the breaker** stops your clock, and the surge then verifies
+  the route. Slam a broken circuit and the round is lost on the spot.
+- **Stats** — meter readings for everything the box has measured: campaign
+  standing, medals, streaks, duels, slams, misfires, time in the box.
 
-Touch-first (tap to uncover, tap two conductors to swap), keyboard-friendly,
-no download, no account.
+Touch-first (tap to uncover, tap two conductors to swap), fully keyboard
+playable (arrows, Enter, R, Esc), no download, no account.
 
 ## Files
 
@@ -34,6 +40,7 @@ no download, no account.
 | `app.js` | The game around the engine: screens, storage, daily streak, campaign chain, DOM renderer |
 | `sound.js` | WebAudio voice: samples with procedural fallbacks |
 | `sounds.js` | Base64 mp3 one-shots (generated via Manny's `tools/build-sounds.py`) |
+| `net.js` | Live Duel transport: Supabase Realtime broadcast channels with room codes (Spinburn's `sb-net.js` pattern). `?sc-local` swaps in a BroadcastChannel so two tabs can duel offline — that is also how the duel test suite runs. |
 | `tools/build-bundle.py` | Single self-contained HTML file (for CSP-strict hosts) |
 | `tools/build-crazygames.py` | Submission zip with the CrazyGames SDK tag injected |
 

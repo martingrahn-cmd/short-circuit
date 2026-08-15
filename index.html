@@ -2402,6 +2402,84 @@
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
         }
 
+        /* ── duellen: lobby, rumskod och rivalens mätartavla ── */
+        .versus-lobby {
+            display: grid;
+            gap: calc(10px * var(--game-scale));
+            margin-bottom: calc(6px * var(--game-scale));
+        }
+
+        .versus-code {
+            font: 800 max(30px, calc(34px * var(--game-scale))) / 1.2 ui-monospace, monospace;
+            letter-spacing: 0.3em;
+            text-align: center;
+            text-indent: 0.3em;
+            color: var(--spark);
+            text-shadow: 0 0 22px rgba(255, 205, 92, 0.5);
+        }
+
+        .versus-join {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: calc(8px * var(--game-scale));
+        }
+
+        .versus-input {
+            min-width: 0;
+            border: 1px solid rgba(140, 165, 185, 0.25);
+            border-radius: calc(10px * var(--game-scale));
+            background: rgba(5, 8, 14, 0.85);
+            color: #eef3fb;
+            font: 700 max(16px, calc(18px * var(--game-scale))) / 1.2 ui-monospace, monospace;
+            letter-spacing: 0.25em;
+            text-indent: 0.25em;
+            text-align: center;
+            text-transform: uppercase;
+            padding: calc(10px * var(--game-scale));
+        }
+        .versus-input:focus-visible {
+            outline: 2px solid var(--puzzle-accent);
+            outline-offset: 1px;
+        }
+
+        .versus-status {
+            min-height: 1.3em;
+            color: rgba(255, 205, 92, 0.85);
+            font-size: max(10px, calc(11px * var(--game-scale)));
+            text-align: center;
+        }
+
+        .versus-hud {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: calc(8px * var(--game-scale));
+            margin-bottom: calc(6px * var(--game-scale));
+            padding: calc(5px * var(--game-scale)) calc(10px * var(--game-scale));
+            border: 1px solid rgba(115, 232, 246, 0.16);
+            border-radius: 9px;
+            background: linear-gradient(180deg, rgba(10, 14, 22, 0.9), rgba(6, 9, 15, 0.95));
+            font: 700 max(9px, calc(10px * var(--game-scale))) / 1.4 ui-monospace, monospace;
+            letter-spacing: 0.08em;
+        }
+
+        .versus-hud__rounds { color: var(--puzzle-accent); white-space: nowrap; }
+
+        .versus-hud__rival {
+            color: rgba(203, 220, 240, 0.65);
+            text-align: right;
+        }
+
+        .versus-hud__rival.is-slam {
+            color: var(--spark);
+            text-shadow: 0 0 9px rgba(255, 205, 92, 0.5);
+        }
+
+        .breaker--slam {
+            min-height: calc(56px * var(--game-scale));
+            letter-spacing: 0.07em;
+        }
+
         /* ── tangentbordstipsen: bara där ett tangentbord troligen finns ── */
         .title-keys {
             display: none;
@@ -2441,6 +2519,7 @@
         <div class="title-actions">
             <button class="menu-button menu-button--primary breaker" type="button" data-action="daily"><i class="breaker-led breaker-led--amber" aria-hidden="true"></i>&#9728; Daily Lock</button>
             <button class="menu-button breaker" type="button" data-action="select"><i class="breaker-led" aria-hidden="true"></i>The 24-Lock Campaign</button>
+            <button class="menu-button breaker" type="button" data-action="versus"><i class="breaker-led" aria-hidden="true"></i>&#9889; Live Duel</button>
         </div>
         <p id="titleDailyNote" class="title-daily-note"></p>
         <div class="title-foot">
@@ -2477,11 +2556,32 @@
         <button class="menu-button select-back" type="button" data-action="title">Back</button>
     </section>
 
+    <!-- Duell-lobbyn -->
+    <section id="screenVersus" class="screen-panel" hidden aria-labelledby="versusTitle">
+        <p class="eyebrow">Live duel</p>
+        <h2 id="versusTitle">Versus</h2>
+        <p class="screen-copy">Same board, live rival, first to three. Build your route &mdash; but only the breaker stops your clock. Slam it on a broken circuit and the round is lost.</p>
+        <div class="versus-lobby">
+            <button class="menu-button menu-button--primary breaker" type="button" data-action="versus-host"><i class="breaker-led breaker-led--amber" aria-hidden="true"></i>Create a room</button>
+            <p id="versusCode" class="versus-code" hidden></p>
+            <div class="versus-join">
+                <input id="versusJoinInput" class="versus-input" maxlength="4" placeholder="CODE" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Room code">
+                <button class="menu-button breaker" type="button" data-action="versus-join"><i class="breaker-led" aria-hidden="true"></i>Join</button>
+            </div>
+            <p id="versusStatus" class="versus-status" role="status" aria-live="polite"></p>
+        </div>
+        <button class="menu-button select-back" type="button" data-action="versus-back">Back</button>
+    </section>
+
     <!-- Pusslet -->
     <section id="screenPuzzle" class="screen-panel" hidden aria-labelledby="puzzleTitle" aria-describedby="puzzleCopy puzzleStatus">
         <div class="screen-top">
             <p id="puzzleEyebrow" class="eyebrow">Circuit lock</p>
             <span id="puzzleDifficulty" class="puzzle-difficulty">Lock 1 of 24</span>
+        </div>
+        <div id="versusHud" class="versus-hud" hidden>
+            <span id="versusScore" class="versus-hud__rounds"></span>
+            <span id="versusRival" class="versus-hud__rival"></span>
         </div>
         <h2 id="puzzleTitle">Close the circuit</h2>
         <p id="puzzleCopy" class="screen-copy">Uncover conductors and swap them into a route from IN to OUT &mdash; ahead of the current.</p>
@@ -2510,9 +2610,10 @@
         <div id="puzzleWonActions" class="menu-actions"></div>
     </section>
 </div>
-<script src="sounds.js?v=6"></script>
-<script src="engine.js?v=6"></script>
-<script src="sound.js?v=6"></script>
-<script src="app.js?v=6"></script>
+<script src="sounds.js?v=7"></script>
+<script src="engine.js?v=7"></script>
+<script src="sound.js?v=7"></script>
+<script src="net.js?v=7"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

@@ -25,6 +25,12 @@ const SC_STAT_ZEROES = Object.freeze({
     seconds: 0,         // total time spent on the puzzle screen
     fastest: 0,
     totalSolveSeconds: 0,
+    duels: 0,           // live duels finished
+    duelWins: 0,
+    duelRounds: 0,      // duel rounds played
+    duelRoundWins: 0,
+    slams: 0,           // breaker slams
+    misfires: 0,        // slams on a broken circuit
 });
 
 const scStore = {
@@ -61,6 +67,8 @@ class ShortCircuit {
             this.loadJson(SC_KEYS.stats));
         this.usesKeyboard = false;
         this.focusBoardOnRender = false;
+        this.duel = null;               // live-duel state while in Versus
+        this.duelHudText = '';
         this.lastResult = null;
         this.activeDaily = null;         // dateKey while a daily is live
         this.renderedRevision = -1;
@@ -74,6 +82,8 @@ class ShortCircuit {
         this.dom = Object.fromEntries([
             'screenTitle', 'screenSelect', 'screenPuzzle', 'screenWon',
             'screenStats', 'statsBody',
+            'screenVersus', 'versusCode', 'versusJoinInput', 'versusStatus',
+            'versusHud', 'versusScore', 'versusRival',
             'titleDailyNote', 'muteButton', 'dailyRow', 'campaignRows',
             'puzzleEyebrow', 'puzzleDifficulty', 'puzzleTitle', 'puzzleCopy',
             'puzzleBody', 'puzzleStatus', 'puzzleActions',
@@ -98,9 +108,15 @@ class ShortCircuit {
             }
         });
 
+        this.dom.versusJoinInput?.addEventListener('input', () => {
+            const el = this.dom.versusJoinInput;
+            el.value = el.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        });
+
         this.syncMute();
         this.syncTitleNote();
         this.gameVoltInit();
+        this.initNet();
         this.initBackdrop();
 
         this.lastFrame = performance.now();
@@ -148,9 +164,17 @@ class ShortCircuit {
         const key = event.key;
 
         if (key === 'Escape') {
+            // Mid-duel, Escape must never forfeit by accident — the
+            // Forfeit button is a deliberate press.
+            if (this.duel?.started) return;
             if (this.screen === 'puzzle') this.leavePuzzle();
             else if (this.screen === 'select') this.showTitle();
             else if (this.screen === 'stats') this.showTitle();
+            else if (this.screen === 'versus') {
+                window.SCNet?.leave();
+                this.duel = null;
+                this.showTitle();
+            }
             return;
         }
 
@@ -263,6 +287,429 @@ class ShortCircuit {
         if (!target) return false;
         target.focus();
         return true;
+    }
+
+    // ── the live duel ──
+    //
+    // Same board, live rival, first to three rounds. The twist: solving
+    // the circuit is not enough — only slamming the breaker stops your
+    // clock, and the current then surges to verify the route. Slam on a
+    // broken circuit and the round is lost on the spot. Transport is
+    // net.js (Supabase Realtime broadcast, Spinburn-style room codes).
+
+    initNet() {
+        const net = window.SCNet;
+        if (!net) return;
+        net.on('opponentJoined', () => {
+            try { this.duelConnected(); } catch (err) { scFault('duel:join', err); }
+        });
+        net.on('left', () => {
+            try { this.duelRivalLeft(); } catch (err) { scFault('duel:left', err); }
+        });
+        net.on('msg', p => {
+            try { this.duelMessage(p.t, p.d || {}); } catch (err) { scFault('duel:' + p.t, err); }
+        });
+    }
+
+    netSend(type, payload) {
+        try { window.SCNet?.send(type, payload); } catch { /* best effort */ }
+    }
+
+    showVersus() {
+        this.engine.clear();
+        this.activeDaily = null;
+        this.duel = null;
+        this.duelHudText = '';
+        this.dom.versusCode.hidden = true;
+        this.dom.versusStatus.textContent = window.SCNet ?
+            '' : 'Versus needs net.js — reload the page.';
+        this.setScreen('versus');
+        window.SCNet?.preload();
+    }
+
+    duelHost() {
+        if (!window.SCNet) return;
+        this.dom.versusStatus.textContent = 'Opening a room…';
+        SCNet.host().then(code => {
+            this.duel = this.freshDuel('host', code);
+            this.dom.versusCode.textContent = code;
+            this.dom.versusCode.hidden = false;
+            this.dom.versusStatus.textContent =
+                'Share the code — waiting for a rival…';
+        }).catch(() => {
+            this.dom.versusStatus.textContent =
+                'No connection to the duel service. Try again on gamevolt.io.';
+        });
+    }
+
+    duelJoin() {
+        if (!window.SCNet) return;
+        const code = this.dom.versusJoinInput.value.trim();
+        if (code.length !== 4) {
+            this.dom.versusStatus.textContent = 'A room code is four characters.';
+            return;
+        }
+        this.dom.versusStatus.textContent = `Knocking on room ${code}…`;
+        SCNet.join(code).then(() => {
+            this.duel = this.freshDuel('guest', code);
+        }).catch(() => {
+            this.dom.versusStatus.textContent =
+                'No connection to the duel service. Try again on gamevolt.io.';
+        });
+    }
+
+    freshDuel(role, code) {
+        return {
+            role, code,
+            bestOf: 5, seeds: [], entries: [],
+            round: 0, myScore: 0, rivalScore: 0,
+            phase: 'lobby',
+            slammed: false, slamTime: 0,
+            myResult: null, rivalResult: null,
+            rivalPct: 0, rivalSlammed: false,
+            deadline: 0, progressSentAt: 0, lastPctSent: -1,
+            myRematch: false, rivalRematch: false,
+            started: false,
+        };
+    }
+
+    duelConnected() {
+        const d = this.duel;
+        if (!d) return;
+        this.sound.playConfirm();
+        if (d.role === 'host') {
+            this.dom.versusStatus.textContent = 'Rival connected — dealing the boards…';
+            this.duelSetupMatch();
+        } else {
+            this.dom.versusStatus.textContent = 'Connected — waiting for the boards…';
+        }
+    }
+
+    /** Host only: pick seeds and locks for the match, tell the guest. */
+    duelSetupMatch() {
+        const d = this.duel;
+        const base = Date.now() >>> 0;
+        d.seeds = Array.from({ length: 9 }, (_, i) =>
+            this.engine.hashSeed(`${d.code}:${base}:${i}`) >>> 0);
+        d.entries = [3, 5, 7, 8, 9];    // locks 4, 6, 8, 9, 10 — a rising curve
+        d.myScore = 0; d.rivalScore = 0;
+        d.myRematch = false; d.rivalRematch = false;
+        this.netSend('setup', {
+            seeds: d.seeds, entries: d.entries, bestOf: d.bestOf,
+        });
+    }
+
+    duelMessage(type, data) {
+        const d = this.duel;
+        if (!d) return;
+        if (type === 'setup' && d.role === 'guest') {
+            d.seeds = (data.seeds || []).map(Number);
+            d.entries = (data.entries || []).map(Number);
+            d.bestOf = Number(data.bestOf) || 5;
+            d.myScore = 0; d.rivalScore = 0;
+            d.myRematch = false; d.rivalRematch = false;
+            this.netSend('setup-ok', {});
+            return;
+        }
+        if (type === 'setup-ok' && d.role === 'host') {
+            this.netSend('go', { round: 0 });
+            this.startDuelRound(0);
+            return;
+        }
+        if (type === 'go' && d.role === 'guest') {
+            this.startDuelRound(Number(data.round) || 0);
+            return;
+        }
+        if (type === 'progress') {
+            d.rivalPct = Math.max(0, Math.min(100, Number(data.pct) || 0));
+            return;
+        }
+        if (type === 'slam') {
+            d.rivalSlammed = true;
+            this.sound.playClank();
+            return;
+        }
+        if (type === 'result') {
+            d.rivalResult = {
+                won: data.won === true,
+                time: Number(data.time) || 0,
+            };
+            if (d.rivalResult.won && !d.myResult) d.deadline = d.rivalResult.time;
+            this.duelResolveRound();
+            return;
+        }
+        if (type === 'rematch') {
+            d.rivalRematch = true;
+            this.duelMaybeRematch();
+        }
+    }
+
+    startDuelRound(round) {
+        const d = this.duel;
+        if (!d || !d.seeds.length) return;
+        d.round = round;
+        d.phase = 'playing';
+        d.started = true;
+        d.slammed = false; d.slamTime = 0;
+        d.myResult = null; d.rivalResult = null;
+        d.rivalPct = 0; d.rivalSlammed = false;
+        d.deadline = 0; d.lastPctSent = -1; d.progressSentAt = 0;
+        const entry = LOCK_CAMPAIGN[d.entries[round % d.entries.length]];
+        const seed = (d.seeds[round % d.seeds.length] + round * 7919) >>> 0;
+        this.activeDaily = null;
+        this.engine.start('pipes', entry.lock, seed, { balance: entry });
+        this.stats.duelRounds += 1;
+        this.saveStats();
+        this.enterPuzzle();
+    }
+
+    /** The button the whole mode is named for. */
+    duelSlam() {
+        const d = this.duel;
+        const state = this.engine.state;
+        if (!d || d.phase !== 'playing' || d.slammed || !state) return;
+        if (state.solved || state.phase === 'failed' ||
+            state.flowPhase === 'failed') return;
+        d.slammed = true;
+        d.slamTime = Math.round(state.elapsed * 10) / 10;
+        this.stats.slams += 1;
+        this.saveStats();
+        this.netSend('slam', {});
+        this.renderedRevision = -1;     // rebuild: the board goes hands-off
+        if (this.engine.isPipeRouteComplete(state)) {
+            // Verified. The clock stands and the surge races to OUT.
+            state.flowStep = Math.min(state.flowStep || 1, 0.05);
+            this.engine.refreshPipeFastForward(state);
+            this.sound.playSurge();
+        } else {
+            // The whole mode in one sentence: slam a broken circuit
+            // and the round is lost on the spot. This is set synchronously,
+            // so the update() transition hook never sees it — handle the
+            // fallout here.
+            this.engine.failPipeFlow(state,
+                'Breaker slammed on a broken circuit — the round is lost.');
+            this.stats.misfires += 1;
+            this.saveStats();
+            this.fx('is-brownout');
+            this.sound.playCircuitFail();
+            const time = d.slamTime;
+            setTimeout(() => {
+                if (this.duel === d) {
+                    this.duelFinishRound({ won: false, time });
+                }
+            }, 1100);
+        }
+        this.syncDuelHud();
+    }
+
+    /** My board reached an outcome: solved (won) or blown (lost). */
+    duelFinishRound(result) {
+        const d = this.duel;
+        if (!d || d.phase !== 'playing' || d.myResult) return;
+        d.myResult = result;
+        this.netSend('result', {
+            round: d.round, won: result.won, time: result.time,
+        });
+        this.duelResolveRound();
+    }
+
+    /**
+     * Round scoring, computed identically on both sides:
+     * a lost board hands the round over instantly; two solved boards
+     * compare times (tie goes to the host — deterministic, and the
+     * host earned it by making the room).
+     */
+    duelResolveRound() {
+        const d = this.duel;
+        if (!d || d.phase !== 'playing') return;
+        const mine = d.myResult;
+        const theirs = d.rivalResult;
+        if (mine && !mine.won) {
+            return this.duelApplyRound('rival',
+                mine.beaten ? 'Rival’s time stood.' :
+                d.slammed ? 'You slammed a broken circuit.' :
+                    'Your circuit blew.');
+        }
+        if (theirs && !theirs.won) {
+            return this.duelApplyRound('me', 'Rival’s circuit blew.');
+        }
+        if (mine && theirs) {
+            if (mine.time === theirs.time) {
+                return this.duelApplyRound(
+                    d.role === 'host' ? 'me' : 'rival',
+                    `Dead heat at ${mine.time.toFixed(1)}s — tie goes to the host.`);
+            }
+            const winner = mine.time < theirs.time ? 'me' : 'rival';
+            return this.duelApplyRound(winner,
+                `${mine.time.toFixed(1)}s vs rival’s ${theirs.time.toFixed(1)}s.`);
+        }
+        // One solved result alone: wait for the other side (or the deadline).
+    }
+
+    duelApplyRound(winner, note) {
+        const d = this.duel;
+        d.phase = 'roundEnd';
+        this.engine.clear();
+        if (winner === 'me') {
+            d.myScore += 1;
+            this.stats.duelRoundWins += 1;
+            this.saveStats();
+        } else if (winner === 'rival') {
+            d.rivalScore += 1;
+        }
+        const target = Math.ceil(d.bestOf / 2);
+        if (d.myScore >= target || d.rivalScore >= target) {
+            return this.duelMatchEnd();
+        }
+        this.renderDuelRound(winner, note);
+        this.setScreen('won');
+        if (this.usesKeyboard) this.focusPrimary();
+        if (d.role === 'host') {
+            setTimeout(() => {
+                if (this.duel !== d || d.phase !== 'roundEnd') return;
+                const next = d.round + 1;
+                this.netSend('go', { round: next });
+                this.startDuelRound(next);
+            }, 3200);
+        }
+    }
+
+    duelMatchEnd() {
+        const d = this.duel;
+        d.phase = 'matchEnd';
+        const won = d.myScore > d.rivalScore;
+        this.stats.duels += 1;
+        if (won) this.stats.duelWins += 1;
+        this.saveStats();
+        if (won) { this.fx('is-surge'); this.sound.playTriumph(); }
+        else { this.sound.playCircuitFail(); }
+        this.renderDuelMatch(won,
+            `${d.myScore} — ${d.rivalScore} over ${d.round + 1} rounds.`);
+        this.setScreen('won');
+        if (this.usesKeyboard) this.focusPrimary();
+    }
+
+    duelMaybeRematch() {
+        const d = this.duel;
+        if (!d || d.phase !== 'matchEnd' || !d.myRematch || !d.rivalRematch) return;
+        if (d.role === 'host') this.duelSetupMatch();
+        else this.dom.puzzleWonTime.textContent = 'Rematch! Dealing new boards…';
+    }
+
+    duelRivalLeft() {
+        const d = this.duel;
+        if (!d) return;
+        if (!d.started) {
+            this.dom.versusStatus.textContent = 'Rival left the room.';
+            return;
+        }
+        if (d.phase === 'matchEnd' || d.phase === 'gone') {
+            d.phase = 'gone';
+            this.dom.puzzleWonTime.textContent = 'Rival pulled the plug.';
+            return;
+        }
+        d.phase = 'gone';
+        this.engine.clear();
+        this.stats.duels += 1;
+        this.stats.duelWins += 1;
+        this.saveStats();
+        this.renderDuelMatch(true, 'Rival pulled the plug — the match is yours.');
+        this.setScreen('won');
+    }
+
+    duelForfeit() {
+        const d = this.duel;
+        window.SCNet?.leave();
+        if (d && d.started && d.phase !== 'matchEnd' && d.phase !== 'gone') {
+            this.stats.duels += 1;    // a forfeit counts as a finished duel
+            this.saveStats();
+        }
+        this.duel = null;
+        this.engine.clear();
+        this.syncDuelHud();
+        this.showTitle();
+    }
+
+    renderDuelRound(winner, note) {
+        const d = this.duel;
+        this.dom.puzzleWonEyebrow.textContent = `Live duel · Room ${d.code}`;
+        this.dom.puzzleWonTitle.textContent =
+            winner === 'me' ? 'Round yours!' :
+            winner === 'rival' ? 'Round lost' : 'Double blowout';
+        this.dom.puzzleWonBest.textContent =
+            `${d.myScore} — ${d.rivalScore} · first to ${Math.ceil(d.bestOf / 2)}`;
+        this.dom.puzzleWonTime.textContent = `${note} Next round in a moment…`;
+        this.dom.puzzleWonStats.replaceChildren();
+        this.dom.puzzleWonActions.replaceChildren(
+            this.button('Forfeit duel', 'versus-forfeit')
+        );
+    }
+
+    renderDuelMatch(won, note) {
+        const d = this.duel;
+        this.dom.puzzleWonEyebrow.textContent = `Live duel · Room ${d.code}`;
+        this.dom.puzzleWonTitle.textContent = won ? 'Match won!' : 'Match lost';
+        this.dom.puzzleWonBest.textContent = note;
+        this.dom.puzzleWonTime.textContent = won ?
+            'The junction box is yours.' : 'The rival routed you this time.';
+        this.dom.puzzleWonStats.replaceChildren();
+        this.dom.puzzleWonActions.replaceChildren();
+        if (d.phase !== 'gone') {
+            this.dom.puzzleWonActions.append(
+                this.button('Rematch', 'versus-rematch', { primary: true })
+            );
+        }
+        this.dom.puzzleWonActions.append(
+            this.button('Leave duel', 'versus-forfeit')
+        );
+    }
+
+    syncDuelHud() {
+        const d = this.duel;
+        if (!this.dom.versusHud) return;
+        if (!d || !d.started) {
+            this.dom.versusHud.hidden = true;
+            this.duelHudText = '';
+            return;
+        }
+        const target = Math.ceil(d.bestOf / 2);
+        const dots = n => '●'.repeat(n) + '○'.repeat(target - n);
+        const rival = d.rivalSlammed && d.phase === 'playing' ?
+            '⚡ RIVAL SLAMMED THE BREAKER' :
+            d.phase === 'playing' ? `RIVAL · building · ${d.rivalPct}%` :
+            'RIVAL';
+        const text = `YOU ${dots(d.myScore)}  ${dots(d.rivalScore)} RIVAL|${rival}`;
+        if (text === this.duelHudText) return;
+        this.duelHudText = text;
+        this.dom.versusHud.hidden = false;
+        this.dom.versusScore.textContent = text.split('|')[0];
+        this.dom.versusRival.textContent = rival;
+        this.dom.versusRival.classList.toggle(
+            'is-slam', d.rivalSlammed && d.phase === 'playing');
+    }
+
+    /** Per-frame duel work: progress pings, the deadline, the HUD. */
+    duelTick(state) {
+        const d = this.duel;
+        if (!d || d.phase !== 'playing' || !state) return;
+        const now = performance.now();
+        if (now - d.progressSentAt > 900) {
+            d.progressSentAt = now;
+            const placed = state.cells.filter(
+                (cell, k) => cell.welded || cell.solutionIndex === k
+            ).length;
+            const pct = Math.round(100 * placed / state.cells.length);
+            if (pct !== d.lastPctSent) {
+                d.lastPctSent = pct;
+                this.netSend('progress', { pct });
+            }
+        }
+        // The rival's verified time stands: once it cannot be beaten,
+        // the round is over even mid-build.
+        if (d.deadline > 0 && !d.myResult && state.elapsed > d.deadline) {
+            this.duelFinishRound({ won: false, time: d.deadline, beaten: true });
+        }
+        this.syncDuelHud();
     }
 
     /**
@@ -578,6 +1025,8 @@ class ShortCircuit {
         this.dom.screenPuzzle.hidden = name !== 'puzzle';
         this.dom.screenWon.hidden = name !== 'won';
         this.dom.screenStats.hidden = name !== 'stats';
+        this.dom.screenVersus.hidden = name !== 'versus';
+        this.syncDuelHud();
     }
 
     showTitle() {
@@ -674,6 +1123,14 @@ class ShortCircuit {
                 tile(info.bestStreak, 'best streak'),
                 tile(stats.dailySolves, 'dailies solved'),
             ]),
+            group('The duels', 'duel', [
+                tile(stats.duelWins, 'duels won'),
+                tile(stats.duels, 'duels fought'),
+                tile(stats.duelRoundWins, 'rounds taken'),
+                tile(stats.duelRounds, 'rounds played'),
+                tile(stats.slams, 'breaker slams'),
+                tile(stats.misfires, 'misfires'),
+            ]),
             group('The grind', 'grind', [
                 tile(stats.solves, 'locks solved'),
                 tile(stats.attempts, 'circuits started'),
@@ -749,6 +1206,7 @@ class ShortCircuit {
     }
 
     leavePuzzle() {
+        if (this.duel) return this.duelForfeit();
         if (this.engine.state?.solved) return;
         this.engine.clear();
         this.activeDaily = null;
@@ -763,6 +1221,21 @@ class ShortCircuit {
         const state = this.engine.state;
         if (!state?.solved) return false;
         const seconds = Math.round(state.elapsed * 10) / 10;
+        if (this.duel) {
+            // A duel round: the clock stopped at the slam (or, if the
+            // creep finished the job unslammed, at the solve itself).
+            const time = this.duel.slammed ? this.duel.slamTime : seconds;
+            this.engine.clear();
+            this.fx('is-surge');
+            this.sound.playSolveBlip();
+            this.duelFinishRound({ won: true, time });
+            if (this.duel && this.duel.phase === 'playing') {
+                this.dom.puzzleStatus.textContent =
+                    `Circuit verified at ${time.toFixed(1)}s — ` +
+                    'waiting for the rival…';
+            }
+            return true;
+        }
         this.stats.solves += 1;
         if (state.dailyLock) this.stats.dailySolves += 1;
         if (Number.isFinite(state.moves)) this.stats.swaps += state.moves;
@@ -892,7 +1365,22 @@ class ShortCircuit {
         if (previousPhase !== 'failed' && state.flowPhase === 'failed') {
             this.fx('is-brownout');
             this.sound.playCircuitFail();
+            if (this.duel?.phase === 'playing' && !this.duel.myResult) {
+                if (this.duel.slammed) {
+                    this.stats.misfires += 1;
+                    this.saveStats();
+                }
+                const elapsed = Math.round(state.elapsed * 10) / 10;
+                // Let the hazard stripes land before the round turns over.
+                const d = this.duel;
+                setTimeout(() => {
+                    if (this.duel === d) {
+                        this.duelFinishRound({ won: false, time: elapsed });
+                    }
+                }, 1100);
+            }
         }
+        this.duelTick(state);
 
         if (this.engine.revision !== this.renderedRevision) {
             this.renderedRevision = this.engine.revision;
@@ -921,6 +1409,28 @@ class ShortCircuit {
         if (action === 'title') { this.sound.playConfirm(); this.showTitle(); return; }
         if (action === 'select') { this.sound.playConfirm(); this.showSelect(); return; }
         if (action === 'stats') { this.sound.playConfirm(); this.showStats(); return; }
+        if (action === 'versus') { this.sound.playConfirm(); this.showVersus(); return; }
+        if (action === 'versus-host') { this.duelHost(); return; }
+        if (action === 'versus-join') { this.duelJoin(); return; }
+        if (action === 'versus-back') {
+            this.sound.playConfirm();
+            window.SCNet?.leave();
+            this.duel = null;
+            this.showTitle();
+            return;
+        }
+        if (action === 'versus-slam') { this.duelSlam(); return; }
+        if (action === 'versus-forfeit') { this.sound.playConfirm(); this.duelForfeit(); return; }
+        if (action === 'versus-rematch') {
+            const d = this.duel;
+            if (d && d.phase === 'matchEnd') {
+                d.myRematch = true;
+                this.netSend('rematch', {});
+                this.dom.puzzleWonTime.textContent = 'Waiting for the rival…';
+                this.duelMaybeRematch();
+            }
+            return;
+        }
         if (action === 'daily') { this.startDaily(); return; }
         if (action === 'start-lock') {
             this.startLock(Number(button.dataset.value));
@@ -932,6 +1442,8 @@ class ShortCircuit {
         if (action === 'won-menu') { this.sound.playConfirm(); this.showSelect(); return; }
 
         if (action.startsWith('puzzle-')) {
+            // A slammed board is hands-off: the current has the floor.
+            if (this.duel?.slammed) return;
             const handled = this.engine.action(action, button.dataset.value);
             if (!handled) return;
             if (action === 'puzzle-pipe') this.stats.taps += 1;
@@ -1145,14 +1657,21 @@ class ShortCircuit {
     }
 
     renderPuzzle(state) {
-        this.dom.puzzleEyebrow.textContent = state.dailyLock ?
-            'Daily lock' : 'Circuit lock';
-        const label = state.dailyLock ?
+        const duel = this.duel;
+        this.dom.puzzleEyebrow.textContent = duel ? 'Live duel' :
+            state.dailyLock ? 'Daily lock' : 'Circuit lock';
+        const label = duel ?
+            `Round ${duel.round + 1} · first to ${Math.ceil(duel.bestOf / 2)}` :
+            state.dailyLock ?
             `Daily lock · ${this.prettyDate(state.dailyLock)}` :
             `Lock ${state.difficulty} of ${LOCK_CAMPAIGN.length}`;
-        this.dom.puzzleDifficulty.textContent = state.teaching ?
+        this.dom.puzzleDifficulty.textContent = state.teaching && !duel ?
             `${label} · slow current` : label;
-        this.dom.puzzleCopy.textContent = state.teaching ?
+        this.dom.puzzleCopy.textContent = duel ?
+            'Build the route — then SLAM THE BREAKER to stop your clock. ' +
+            'The surge verifies the circuit; slam a broken one and the ' +
+            'round is lost.' :
+            state.teaching ?
             'Your first lock, and the current crawls on this one. Swap ' +
             'conductors until a route runs from IN to OUT. The next lock ' +
             'runs at full speed.' :
@@ -1205,7 +1724,8 @@ class ShortCircuit {
             button.className = 'puzzle-pipe-cell';
             button.dataset.action = 'puzzle-pipe';
             button.dataset.value = String(index);
-            button.disabled = failed || state.solved;
+            button.disabled = failed || state.solved ||
+                this.duel?.slammed === true;
             button.classList.toggle(
                 'is-covered',
                 !cell.revealed && !state.filled.has(index)
@@ -1366,19 +1886,34 @@ class ShortCircuit {
         shell.append(legend, board);
         this.dom.puzzleBody.append(shell);
 
-        if (failed) {
+        if (this.duel) {
+            // A duel has no restarts and no way back — only the breaker
+            // and, for the defeated, the door.
+            if (!failed && !state.solved && !this.duel.slammed) {
+                const slam = this.button(
+                    'SLAM THE BREAKER', 'versus-slam', { primary: true }
+                );
+                slam.classList.add('breaker', 'breaker--slam');
+                this.dom.puzzleActions.append(slam);
+            }
             this.dom.puzzleActions.append(
-                this.button('Try again', 'puzzle-reset', { primary: true })
+                this.button('Forfeit duel', 'versus-forfeit')
             );
-        } else if (!state.solved) {
-            this.dom.puzzleActions.append(
-                this.button('Restart circuit', 'puzzle-reset')
-            );
-        }
-        if (!state.solved) {
-            this.dom.puzzleActions.append(
-                this.button('Back to the locks', 'puzzle-close')
-            );
+        } else {
+            if (failed) {
+                this.dom.puzzleActions.append(
+                    this.button('Try again', 'puzzle-reset', { primary: true })
+                );
+            } else if (!state.solved) {
+                this.dom.puzzleActions.append(
+                    this.button('Restart circuit', 'puzzle-reset')
+                );
+            }
+            if (!state.solved) {
+                this.dom.puzzleActions.append(
+                    this.button('Back to the locks', 'puzzle-close')
+                );
+            }
         }
         this.syncFlow(state);
 
