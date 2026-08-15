@@ -6,8 +6,13 @@
     <meta name="theme-color" content="#05070d">
     <title>Short Circuit</title>
     <meta name="description" content="Short Circuit — route the current before it routes you. Uncover conductors, swap them into a route, and stay ahead of the live spark. 24-lock campaign and a daily lock with streaks.">
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="icon" type="image/png" href="icons/icon-192.png">
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Short Circuit">
     <style>
-
         :root {
             color-scheme: dark;
             font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -21,10 +26,8 @@
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
         [hidden] { display: none !important; }
-
-        html, body {
-            min-height: 100%;
-        }
+        html { -webkit-text-size-adjust: 100%; }
+        html, body { min-height: 100%; overscroll-behavior-y: contain; }
 
         body {
             background:
@@ -34,15 +37,15 @@
             color: #eef3fb;
             display: flex;
             justify-content: center;
-            padding: calc(14px * var(--game-scale)) calc(10px * var(--game-scale)) calc(28px * var(--game-scale));
+            padding-left: max(calc(10px * var(--game-scale)), env(safe-area-inset-left));
+            padding-right: max(calc(10px * var(--game-scale)), env(safe-area-inset-right));
+            padding-top: max(calc(14px * var(--game-scale)), env(safe-area-inset-top));
+            padding-bottom: max(calc(28px * var(--game-scale)), env(safe-area-inset-bottom));
             touch-action: manipulation;
             -webkit-tap-highlight-color: transparent;
         }
 
-        .app {
-            width: 100%;
-            max-width: calc(430px * var(--game-scale));
-        }
+        .app { width: 100%; max-width: calc(430px * var(--game-scale)); }
 
         .screen-panel {
             padding: calc(18px * var(--game-scale)) calc(16px * var(--game-scale));
@@ -58,7 +61,6 @@
             margin-bottom: calc(6px * var(--game-scale));
         }
 
-        /* ── Titelskärmen ── */
         .title-panel { text-align: center; }
 
         .title-logo {
@@ -90,6 +92,7 @@
             90%, 94% { opacity: 0.25; }
             92%, 96% { opacity: 1; }
         }
+        @media (prefers-reduced-motion: reduce) { .title-zap { animation: none; } }
 
         .title-tagline {
             color: rgba(203, 220, 240, 0.72);
@@ -97,7 +100,11 @@
             margin-bottom: calc(20px * var(--game-scale));
         }
 
-        .title-actions { display: grid; gap: calc(9px * var(--game-scale)); margin-bottom: calc(14px * var(--game-scale)); }
+        .title-actions {
+            display: grid;
+            gap: calc(9px * var(--game-scale));
+            margin-bottom: calc(14px * var(--game-scale));
+        }
 
         .title-daily-note {
             color: rgba(255, 205, 92, 0.85);
@@ -117,9 +124,10 @@
             border-radius: 999px;
             background: none;
             color: rgba(238, 243, 251, 0.6);
-            padding: calc(5px * var(--game-scale)) calc(12px * var(--game-scale));
+            padding: calc(8px * var(--game-scale)) calc(14px * var(--game-scale));
             font-size: max(10px, calc(11px * var(--game-scale)));
             cursor: pointer;
+            text-decoration: none;
         }
         .ghost-button:hover { color: #eef3fb; border-color: rgba(115, 232, 246, 0.4); }
 
@@ -140,6 +148,7 @@
         }
 
         .select-back { margin-top: calc(12px * var(--game-scale)); }
+
         .puzzle-help {
             margin-top: calc(10px * var(--game-scale));
             color: rgba(203, 220, 240, 0.45);
@@ -211,6 +220,7 @@
         .menu-actions--won .menu-button:not(.menu-button--primary) {
             min-height: calc(38px * var(--game-scale));
             font-size: max(10px, calc(11px * var(--game-scale)));
+        }
         .menu-button {
             width: 100%;
             min-height: calc(42px * var(--game-scale));
@@ -369,23 +379,6 @@
             --puzzle-accent: #ffd76a;
             --puzzle-accent-rgb: 255, 215, 106;
         }
-
-            font-size: max(10px, calc(11px * var(--game-scale)));
-            line-height: 1.45;
-            text-wrap: balance;
-        }
-
-        .won-line b {
-            color: rgba(243, 247, 255, 0.9);
-            font-weight: 750;
-        }
-
-        .won-line b::after {
-            margin: 0 0.45em;
-            color: rgba(214, 223, 238, 0.34);
-            content: "·";
-        }
-
         .puzzle-grade-list {
             display: flex;
             grid-column: 1 / -1;
@@ -1956,65 +1949,70 @@
                 grid-template-columns: minmax(0, 1fr);
             }
         }
+        /* ── Mobil-max: sist i kaskaden så den vinner över lyftet ── */
+        .menu-button:active { transform: translateY(1px) scale(0.985); }
+        .puzzle-pipe-cell:active:not(:disabled) { transform: scale(0.94); }
+        .puzzle-grade-row:active:not(:disabled) { transform: scale(0.985); }
+        @media (prefers-reduced-motion: reduce) {
+            .menu-button:active,
+            .puzzle-pipe-cell:active:not(:disabled),
+            .puzzle-grade-row:active:not(:disabled) { transform: none; }
+        }
+
+        @media (max-width: 380px) {
+            body { padding-top: 6px; padding-bottom: 12px; }
+            .screen-panel { padding: 12px 10px; border-radius: 14px; }
+            .screen-panel h2 { font-size: 17px; margin-bottom: 3px; }
+            .screen-copy { font-size: 11px; margin-bottom: 8px; }
+            .title-logo { font-size: 30px; }
+        }
+        @media (max-width: 340px) {
+            .puzzle-pipes__labels { font-size: 8px; }
+            .puzzle-pipes__legend { gap: 4px; font-size: 8px; }
+            .puzzle-status { font-size: 10px; }
+        }
+
+        /* korta skärmar (liggande telefon): brädet krymper för att få
+           plats och sekundärtexten kliver undan */
+        @media (max-height: 620px) {
+            body { padding-top: 6px; padding-bottom: 10px; }
+            .screen-panel { padding: 10px 12px; }
+            #puzzleCopy, .puzzle-help { display: none; }
+            .screen-panel h2 { font-size: 16px; margin-bottom: 2px; }
+            .puzzle-pipes__board {
+                max-width: min(100%, calc(100vh - 168px));
+                margin-inline: auto;
+            }
+        }
+        @media (max-height: 460px) {
+            .puzzle-pipes__legend { display: none; }
+            .puzzle-pipes__board { max-width: min(100%, calc(100vh - 118px)); }
+        }
+
+        /* liggande telefon med plats på bredden: bräde vänster, resten
+           höger — då försvinner all scroll */
+        @media (max-height: 620px) and (min-width: 560px) {
+            html, body { height: 100%; }
+            body { align-items: center; }
+            .app { max-width: min(96vw, 720px); }
+            #screenPuzzle {
+                display: grid;
+                grid-template-columns: minmax(0, auto) minmax(170px, 1fr);
+                grid-auto-rows: min-content;
+                gap: 4px 16px;
+                align-content: center;
+            }
+            #screenPuzzle .puzzle-body { grid-column: 1; grid-row: 1 / span 4; margin: 0; }
+            #screenPuzzle .screen-top,
+            #screenPuzzle h2,
+            #screenPuzzle .puzzle-status,
+            #screenPuzzle .menu-actions { grid-column: 2; }
+            .puzzle-pipes__board { width: calc(100vh - 86px); max-width: none; }
+        }
+
     </style>
 </head>
 <body>
-    <main id="gameFrame" aria-label="Manny the Mole">
-        <canvas id="gameCanvas" aria-label="Playfield"></canvas>
-
-        <div id="gameUi">
-            <header id="gameHud" class="modern-hud" hidden>
-                <div class="hud-card">
-                    <span class="hud-label">Level <span id="hudLevel">1/6</span></span>
-                    <strong class="hud-value"><span id="hudDepth">0</span><small>m</small></strong>
-                    <span id="hudTime" class="hud-time"></span>
-                </div>
-
-                <div class="hud-card hud-card--score">
-                    <span class="hud-label">Loot</span>
-                    <strong id="hudScore" class="hud-value">0</strong>
-                </div>
-
-                <div id="hudAirModule" class="hud-card hud-card--air">
-                    <span class="hud-label">Air</span>
-                    <strong id="hudAir" class="hud-value air-number">100%</strong>
-                    <div class="air-track" aria-hidden="true">
-                        <div id="hudAirFill" class="air-fill"></div>
-                    </div>
-                </div>
-
-                <button id="pauseButton" class="icon-button" type="button" aria-label="Pause the game">
-                    <span class="pause-glyph" aria-hidden="true"></span>
-                </button>
-            </header>
-
-            <div id="sideDrillHint" class="side-drill-hint" role="status" hidden>
-                <span class="side-drill-hint__keys"><kbd>←/→</kbd><span>+</span><kbd>Space</kbd></span><span class="side-drill-hint__touch"><kbd>Stick sideways</kbd><span>+</span><kbd>DRILL</kbd></span><strong>Drill sideways</strong>
-            </div>
-            <div id="touchControls" class="touch-controls" hidden>
-                <div id="touchStickZone" class="touch-stick-zone" aria-hidden="true">
-                <div id="touchStick" class="touch-stick">
-                    <span class="touch-stick__ring"></span>
-                    <span class="touch-stick__knob"></span>
-                    <span class="touch-stick__tick touch-stick__tick--up"></span>
-                    <span class="touch-stick__tick touch-stick__tick--right"></span>
-                    <span class="touch-stick__tick touch-stick__tick--down"></span>
-                    <span class="touch-stick__tick touch-stick__tick--left"></span>
-                </div>
-                </div>
-                <button
-                    id="touchDrill"
-                    class="touch-drill"
-                    type="button"
-                    aria-label="Drill"
-                >
-                    <span aria-hidden="true">DRILL</span>
-                </button>
-            </div>
-    </style>
-</head>
-<body>
-
 <div class="app">
     <!-- Titel -->
     <section id="screenTitle" class="screen-panel title-panel">
@@ -2081,10 +2079,9 @@
         <div id="puzzleWonActions" class="menu-actions"></div>
     </section>
 </div>
-
-<script src="sounds.js?v=1"></script>
-<script src="engine.js?v=1"></script>
-<script src="sound.js?v=1"></script>
-<script src="app.js?v=1"></script>
+<script src="sounds.js?v=2"></script>
+<script src="engine.js?v=2"></script>
+<script src="sound.js?v=2"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>

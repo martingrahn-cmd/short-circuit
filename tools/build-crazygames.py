@@ -32,6 +32,11 @@ with tempfile.TemporaryDirectory() as tmp:
     (stage / 'index.html').write_text(html, encoding='utf-8')
     for name in FILES:
         (stage / name).write_bytes((ROOT / name).read_bytes())
+    (stage / 'manifest.webmanifest').write_bytes(
+        (ROOT / 'manifest.webmanifest').read_bytes())
+    (stage / 'icons').mkdir()
+    for icon in (ROOT / 'icons').glob('*.png'):
+        (stage / 'icons' / icon.name).write_bytes(icon.read_bytes())
 
     with zipfile.ZipFile(OUT, 'w', zipfile.ZIP_DEFLATED) as z:
         for path in sorted(stage.rglob('*')):
