@@ -125,17 +125,16 @@ class ShortCircuit {
         const build = () => {
             const w = this.bgCanvas.width = window.innerWidth;
             const h = this.bgCanvas.height = window.innerHeight;
-            const traces = [];
             const seedRandom = this.engine.createRandom(
                 this.engine.hashSeed(`bg:${w}x${h}`)
             );
-            for (let i = 0; i < 8; i++) {
+            const makeTrace = steps => {
                 const points = [{
                     x: seedRandom() * w,
                     y: seedRandom() * h,
                 }];
                 let horizontal = seedRandom() < 0.5;
-                for (let s = 0; s < 5; s++) {
+                for (let s = 0; s < steps; s++) {
                     const last = points[points.length - 1];
                     const run = 60 + seedRandom() * 180;
                     const sign = seedRandom() < 0.5 ? -1 : 1;
@@ -144,13 +143,16 @@ class ShortCircuit {
                         { x: last.x, y: last.y + run * sign });
                     horizontal = !horizontal;
                 }
-                traces.push(points);
-            }
-            this.bgTraces = traces;
-            this.bgSparks = [0, 1, 2].map(i => ({
-                trace: i % traces.length,
-                t: i * 0.33,
-                speed: 0.05 + i * 0.02,
+                return points;
+            };
+            // Two depths of copper: a dim far weave filling the dark,
+            // and a near layer with solder pads that the sparks ride.
+            this.bgFarTraces = Array.from({ length: 14 }, () => makeTrace(6));
+            this.bgTraces = Array.from({ length: 7 }, () => makeTrace(5));
+            this.bgSparks = [0, 1, 2, 3, 4].map(i => ({
+                trace: i % this.bgTraces.length,
+                t: (i * 0.21) % 1,
+                speed: 0.05 + (i % 3) * 0.02,
             }));
             this.bgStatic = null;   // omritas
         };
@@ -203,6 +205,62 @@ class ShortCircuit {
         this.arcs.push({ points, life: 0.22, age: 0 });
     }
 
+    /**
+     * Everything in the backdrop that never moves — the pegboard holes,
+     * both depths of etched traces, the solder pads — painted once per
+     * resize instead of sixty times a second.
+     */
+    paintStatic() {
+        const w = Math.max(1, this.bgCanvas.width);
+        const h = Math.max(1, this.bgCanvas.height);
+        const layer = document.createElement('canvas');
+        layer.width = w;
+        layer.height = h;
+        const ctx = layer.getContext('2d');
+
+        const grid = 34;
+        ctx.fillStyle = 'rgba(148, 200, 220, 0.07)';
+        for (let x = grid / 2; x < w; x += grid) {
+            for (let y = grid / 2; y < h; y += grid) {
+                ctx.fillRect(x - 0.6, y - 0.6, 1.2, 1.2);
+            }
+        }
+
+        const stroke = points => {
+            ctx.beginPath();
+            points.forEach((pt, i) =>
+                i === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y));
+            ctx.stroke();
+        };
+
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(115, 232, 246, 0.08)';
+        this.bgFarTraces.forEach(stroke);
+
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(115, 232, 246, 0.16)';
+        this.bgTraces.forEach(stroke);
+
+        this.bgTraces.forEach((points, traceIndex) => {
+            points.forEach((pt, i) => {
+                const amber = (traceIndex * 3 + i) % 5 === 0;
+                ctx.lineWidth = 1.4;
+                ctx.strokeStyle = amber ?
+                    'rgba(255, 205, 92, 0.34)' : 'rgba(115, 232, 246, 0.30)';
+                ctx.beginPath();
+                ctx.arc(pt.x, pt.y, 3.4, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.fillStyle = amber ?
+                    'rgba(255, 205, 92, 0.55)' : 'rgba(115, 232, 246, 0.42)';
+                ctx.beginPath();
+                ctx.arc(pt.x, pt.y, 1.2, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        });
+
+        this.bgStatic = layer;
+    }
+
     drawBackdrop(dt) {
         const ctx = this.bgCtx;
         if (!ctx || !this.bgTraces) return;
@@ -210,20 +268,22 @@ class ShortCircuit {
         const h = this.bgCanvas.height;
         ctx.clearRect(0, 0, w, h);
 
-        ctx.lineWidth = 1.2;
-        ctx.strokeStyle = 'rgba(115, 232, 246, 0.05)';
-        ctx.fillStyle = 'rgba(115, 232, 246, 0.09)';
-        this.bgTraces.forEach(points => {
-            ctx.beginPath();
-            points.forEach((pt, i) =>
-                i === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y));
-            ctx.stroke();
-            points.forEach(pt => {
-                ctx.beginPath();
-                ctx.arc(pt.x, pt.y, 1.6, 0, Math.PI * 2);
-                ctx.fill();
-            });
-        });
+        // ett långsamt andande sken bakom väven: skåpet har ström
+        if (!this.reducedMotion) {
+            this.bgGlowPhase = (this.bgGlowPhase || 0) + dt * 0.5;
+            const breath = 0.5 + 0.5 * Math.sin(this.bgGlowPhase);
+            const glow = ctx.createRadialGradient(
+                w * 0.5, h * 0.24, 0,
+                w * 0.5, h * 0.24, Math.max(w, h) * 0.55
+            );
+            glow.addColorStop(0, `rgba(115, 232, 246, ${0.045 + 0.035 * breath})`);
+            glow.addColorStop(1, 'rgba(115, 232, 246, 0)');
+            ctx.fillStyle = glow;
+            ctx.fillRect(0, 0, w, h);
+        }
+
+        if (!this.bgStatic) this.paintStatic();
+        ctx.drawImage(this.bgStatic, 0, 0);
 
         if (this.reducedMotion) return;
         this.bgSparks.forEach(spark => {
