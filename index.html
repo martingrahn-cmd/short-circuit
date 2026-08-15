@@ -2283,6 +2283,75 @@
             .puzzle-pipes__board { margin-inline: 12px; }
         }
 
+        /* ── menyeffekterna: strömmen kryper runt huvudbrytaren ── */
+        @property --strom-vinkel {
+            syntax: '<angle>';
+            initial-value: 0deg;
+            inherits: false;
+        }
+
+        .breaker.menu-button--primary {
+            position: relative;
+            isolation: isolate;
+        }
+
+        .breaker.menu-button--primary::after {
+            content: '';
+            position: absolute;
+            inset: -2px;
+            border-radius: inherit;
+            padding: 2px;
+            background: conic-gradient(from var(--strom-vinkel),
+                transparent 0turn 0.72turn,
+                rgba(255, 205, 92, 0.15) 0.8turn,
+                #ffe9a8 0.9turn,
+                rgba(255, 205, 92, 0.15) 0.97turn,
+                transparent 1turn);
+            -webkit-mask:
+                linear-gradient(#fff 0 0) content-box,
+                linear-gradient(#fff 0 0);
+            -webkit-mask-composite: xor;
+            mask:
+                linear-gradient(#fff 0 0) content-box,
+                linear-gradient(#fff 0 0);
+            mask-composite: exclude;
+            animation: strom-runt 3.2s linear infinite;
+            pointer-events: none;
+        }
+
+        @keyframes strom-runt {
+            to { --strom-vinkel: 1turn; }
+        }
+
+        /* loggans glöd andas, först efter tändningen */
+        .title-logo__row2 {
+            animation:
+                logo-ignite-2 1.6s steps(1) both,
+                logo-hum 3.8s ease-in-out 2.2s infinite;
+        }
+
+        @keyframes logo-hum {
+            0%, 100% { filter: brightness(1); }
+            50% { filter: brightness(1.22); }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .breaker.menu-button--primary::after { animation: none; opacity: 0.4; }
+            .title-logo__row2 { animation: none; }
+        }
+
+        /* titeln släpper igenom canvasen: bågar, gnistor och spår syns */
+        @media (max-width: 620px) {
+            #screenTitle {
+                background: linear-gradient(160deg,
+                    rgba(16, 22, 31, 0.68), rgba(9, 13, 21, 0.84));
+            }
+        }
+        #screenTitle {
+            background: linear-gradient(160deg,
+                rgba(16, 22, 31, 0.8), rgba(9, 13, 21, 0.92));
+        }
+
     </style>
 </head>
 <body>
@@ -2355,9 +2424,9 @@
         <div id="puzzleWonActions" class="menu-actions"></div>
     </section>
 </div>
-<script src="sounds.js?v=3"></script>
-<script src="engine.js?v=3"></script>
-<script src="sound.js?v=3"></script>
-<script src="app.js?v=3"></script>
+<script src="sounds.js?v=4"></script>
+<script src="engine.js?v=4"></script>
+<script src="sound.js?v=4"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

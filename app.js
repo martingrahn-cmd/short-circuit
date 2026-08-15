@@ -156,6 +156,51 @@ class ShortCircuit {
         };
         build();
         window.addEventListener('resize', build);
+
+        // Touch anywhere on the title and the cabinet answers in kind:
+        // a small burst of sparks under the finger.
+        this.fxParticles = [];
+        this.arcs = [];
+        this.arcCountdown = 2.5;
+        document.addEventListener('pointerdown', event => {
+            if (this.screen !== 'title' || this.reducedMotion) return;
+            this.spawnSparks(event.clientX, event.clientY);
+        }, { passive: true });
+    }
+
+    spawnSparks(x, y) {
+        for (let i = 0; i < 12; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const speed = 60 + Math.random() * 220;
+            this.fxParticles.push({
+                x, y,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed - 40,
+                life: 0.35 + Math.random() * 0.3,
+                age: 0,
+            });
+        }
+        if (this.fxParticles.length > 160) {
+            this.fxParticles.splice(0, this.fxParticles.length - 160);
+        }
+    }
+
+    /** A jagged arc near the logo: the box is live, and it shows. */
+    spawnArc() {
+        const w = this.bgCanvas.width;
+        const h = this.bgCanvas.height;
+        const y = h * (0.16 + Math.random() * 0.24);
+        const x0 = w * (0.08 + Math.random() * 0.2);
+        const x1 = w * (0.72 + Math.random() * 0.2);
+        const points = [{ x: x0, y }];
+        const steps = 7 + Math.floor(Math.random() * 4);
+        for (let i = 1; i <= steps; i++) {
+            points.push({
+                x: x0 + (x1 - x0) * (i / steps),
+                y: y + (Math.random() - 0.5) * 46,
+            });
+        }
+        this.arcs.push({ points, life: 0.22, age: 0 });
     }
 
     drawBackdrop(dt) {
@@ -213,6 +258,43 @@ class ShortCircuit {
             ctx.beginPath();
             ctx.arc(x, y, 1.6, 0, Math.PI * 2);
             ctx.fill();
+        });
+
+        // gnistregnet från tryck
+        this.fxParticles = this.fxParticles.filter(pt => {
+            pt.age += dt;
+            if (pt.age >= pt.life) return false;
+            pt.x += pt.vx * dt;
+            pt.y += pt.vy * dt;
+            pt.vy += 500 * dt;
+            const fade = 1 - pt.age / pt.life;
+            ctx.fillStyle = `rgba(255, ${205 + Math.floor(40 * fade)}, 110, ${0.9 * fade})`;
+            ctx.fillRect(pt.x - 1, pt.y - 1, 2.4, 2.4);
+            return true;
+        });
+
+        // blixtbågarna över titeln, med slumpad paus emellan
+        if (this.screen === 'title') {
+            this.arcCountdown -= dt;
+            if (this.arcCountdown <= 0) {
+                this.spawnArc();
+                this.arcCountdown = 3.5 + Math.random() * 5;
+            }
+        }
+        this.arcs = this.arcs.filter(arc => {
+            arc.age += dt;
+            if (arc.age >= arc.life) return false;
+            const fade = 1 - arc.age / arc.life;
+            ctx.lineWidth = 1.6;
+            ctx.strokeStyle = `rgba(190, 240, 255, ${0.55 * fade})`;
+            ctx.shadowColor = 'rgba(115, 232, 246, 0.8)';
+            ctx.shadowBlur = 10;
+            ctx.beginPath();
+            arc.points.forEach((pt, i) =>
+                i === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y));
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            return true;
         });
     }
 
