@@ -10,6 +10,21 @@ const SC_KEYS = Object.freeze({
     bests: 'short-circuit:bests',
     daily: 'short-circuit:daily',
     seen: 'short-circuit:lock-seen',
+    stats: 'short-circuit:stats',
+});
+
+// Every counter the box keeps. Merged over whatever is stored, so a
+// player from an older version starts new meters at zero, not NaN.
+const SC_STAT_ZEROES = Object.freeze({
+    solves: 0,          // locks solved, campaign and daily alike
+    dailySolves: 0,
+    attempts: 0,        // circuits started
+    resets: 0,          // restart presses
+    taps: 0,            // conductor presses
+    swaps: 0,           // swaps banked from solved locks
+    seconds: 0,         // total time spent on the puzzle screen
+    fastest: 0,
+    totalSolveSeconds: 0,
 });
 
 const scStore = {
@@ -42,6 +57,10 @@ class ShortCircuit {
         this.screen = 'title';
         this.bests = this.loadJson(SC_KEYS.bests);
         this.daily = this.loadJson(SC_KEYS.daily);
+        this.stats = Object.assign({}, SC_STAT_ZEROES,
+            this.loadJson(SC_KEYS.stats));
+        this.usesKeyboard = false;
+        this.focusBoardOnRender = false;
         this.lastResult = null;
         this.activeDaily = null;         // dateKey while a daily is live
         this.renderedRevision = -1;
@@ -54,6 +73,7 @@ class ShortCircuit {
 
         this.dom = Object.fromEntries([
             'screenTitle', 'screenSelect', 'screenPuzzle', 'screenWon',
+            'screenStats', 'statsBody',
             'titleDailyNote', 'muteButton', 'dailyRow', 'campaignRows',
             'puzzleEyebrow', 'puzzleDifficulty', 'puzzleTitle', 'puzzleCopy',
             'puzzleBody', 'puzzleStatus', 'puzzleActions',
@@ -71,9 +91,11 @@ class ShortCircuit {
             }
         });
         document.addEventListener('keydown', event => {
-            if (event.key !== 'Escape') return;
-            if (this.screen === 'puzzle') this.leavePuzzle();
-            else if (this.screen === 'select') this.showTitle();
+            try {
+                this.handleKey(event);
+            } catch (err) {
+                scFault('key:' + event.key, err);
+            }
         });
 
         this.syncMute();
@@ -111,6 +133,136 @@ class ShortCircuit {
             () => overlay.classList.remove('is-surge', 'is-brownout'),
             900
         );
+    }
+
+    // ── keyboard play ──
+
+    /**
+     * Arrows walk the board or the menu, Enter and Space press whatever
+     * holds focus, R restarts the lock, Escape backs out. Focus only
+     * starts moving once a key is actually used, so touch players never
+     * see a stray focus ring.
+     */
+    handleKey(event) {
+        if (event.metaKey || event.ctrlKey || event.altKey) return;
+        const key = event.key;
+
+        if (key === 'Escape') {
+            if (this.screen === 'puzzle') this.leavePuzzle();
+            else if (this.screen === 'select') this.showTitle();
+            else if (this.screen === 'stats') this.showTitle();
+            return;
+        }
+
+        const isArrow = key === 'ArrowLeft' || key === 'ArrowRight' ||
+            key === 'ArrowUp' || key === 'ArrowDown';
+        const isPress = key === 'Enter' || key === ' ';
+        if (!isArrow && !isPress && key !== 'r' && key !== 'R') return;
+        this.usesKeyboard = true;
+
+        if (key === 'r' || key === 'R') {
+            if (this.screen === 'puzzle') {
+                this.dom.puzzleActions
+                    .querySelector('[data-action="puzzle-reset"]')?.click();
+                event.preventDefault();
+            }
+            return;
+        }
+
+        if (this.screen === 'puzzle') {
+            if (isArrow) {
+                if (this.moveBoardFocus(key)) event.preventDefault();
+            } else if (!this.focusIsInteractive()) {
+                // A bare Enter parks the cursor on the IN conductor;
+                // the next press starts playing.
+                if (this.focusBoardCell(null)) event.preventDefault();
+            }
+            return;
+        }
+
+        if (isArrow) {
+            if (this.moveMenuFocus(key)) event.preventDefault();
+        } else if (!this.focusIsInteractive()) {
+            if (this.focusPrimary()) event.preventDefault();
+        }
+    }
+
+    focusIsInteractive() {
+        const el = document.activeElement;
+        return !!el && el !== document.body &&
+            (el.tagName === 'BUTTON' || el.tagName === 'A');
+    }
+
+    /** Move focus one cell across the board, clamped at the edges. */
+    moveBoardFocus(key) {
+        const cells = this.pipeCells;
+        if (!cells?.length) return false;
+        const active = document.activeElement;
+        if (!active?.classList?.contains('puzzle-pipe-cell')) {
+            return this.focusBoardCell(null);
+        }
+        const size = this.engine.state?.size ||
+            Math.round(Math.sqrt(cells.length));
+        let index = Number(active.dataset.value);
+        const x = index % size;
+        if (key === 'ArrowLeft' && x > 0) index -= 1;
+        else if (key === 'ArrowRight' && x < size - 1) index += 1;
+        else if (key === 'ArrowUp' && index - size >= 0) index -= size;
+        else if (key === 'ArrowDown' && index + size < cells.length) {
+            index += size;
+        }
+        cells[index]?.focus();
+        return true;
+    }
+
+    /** Focus a board cell; null means the IN conductor. */
+    focusBoardCell(index) {
+        const cells = this.pipeCells;
+        if (!cells?.length) return false;
+        const state = this.engine.state;
+        const fallback = state ? state.sourceY * state.size : 0;
+        const cell = cells[index ?? fallback] ?? cells[0];
+        if (!cell || cell.disabled) return false;
+        cell.focus();
+        return true;
+    }
+
+    /** After a rebuild the old cell is gone; put focus back where it was. */
+    restoreBoardFocus(index) {
+        const cell = this.pipeCells[index];
+        if (cell && !cell.disabled) {
+            cell.focus();
+            return;
+        }
+        // The board went dead under the cursor (failed or solved):
+        // hand focus to the actions so Enter means "Try again".
+        this.dom.puzzleActions.querySelector('button')?.focus();
+    }
+
+    /** Walk focus through the visible panel's buttons, wrapping. */
+    moveMenuFocus(key) {
+        const panel = document.querySelector('.screen-panel:not([hidden])');
+        if (!panel) return false;
+        const items = Array.from(
+            panel.querySelectorAll('button:not(:disabled), a[href]')
+        );
+        if (!items.length) return false;
+        const forward = key === 'ArrowDown' || key === 'ArrowRight';
+        const current = items.indexOf(document.activeElement);
+        const index = current === -1 ?
+            (forward ? 0 : items.length - 1) :
+            (current + (forward ? 1 : -1) + items.length) % items.length;
+        items[index].focus();
+        return true;
+    }
+
+    focusPrimary() {
+        const panel = document.querySelector('.screen-panel:not([hidden])');
+        const target = panel?.querySelector('.menu-button--primary') ??
+            panel?.querySelector('button:not(:disabled), a[href]');
+        if (!target) return false;
+        target.focus();
+        return true;
     }
 
     /**
@@ -369,6 +521,10 @@ class ShortCircuit {
         }
     }
 
+    saveStats() {
+        scStore.set(SC_KEYS.stats, JSON.stringify(this.stats));
+    }
+
     getBest(lock) {
         const value = this.bests[`pipes:${lock}`];
         return Number.isFinite(value) && value > 0 ? value : 0;
@@ -421,6 +577,7 @@ class ShortCircuit {
         this.dom.screenSelect.hidden = name !== 'select';
         this.dom.screenPuzzle.hidden = name !== 'puzzle';
         this.dom.screenWon.hidden = name !== 'won';
+        this.dom.screenStats.hidden = name !== 'stats';
     }
 
     showTitle() {
@@ -435,6 +592,101 @@ class ShortCircuit {
         this.activeDaily = null;
         this.renderSelect();
         this.setScreen('select');
+    }
+
+    showStats() {
+        this.engine.clear();
+        this.activeDaily = null;
+        this.renderStats();
+        this.setScreen('stats');
+    }
+
+    /** Seconds → "2h 5m", "3m 12s" or "42s", whichever reads best. */
+    fmtDuration(totalSeconds) {
+        const s = Math.floor(Number(totalSeconds) || 0);
+        const h = Math.floor(s / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        if (h > 0) return `${h}h ${m}m`;
+        if (m > 0) return `${m}m ${s % 60}s`;
+        return `${s}s`;
+    }
+
+    /** Campaign standing derived from the stored bests. */
+    campaignStanding() {
+        const medals = { gold: 0, silver: 0, bronze: 0 };
+        let solvedLocks = 0;
+        let bestSum = 0;
+        LOCK_CAMPAIGN.forEach((entry, i) => {
+            const best = this.getBest(i + 1);
+            if (best <= 0) return;
+            solvedLocks += 1;
+            bestSum += best;
+            const medal = lockMedal(entry, best);
+            if (medal) medals[medal] += 1;
+        });
+        return { solvedLocks, medals, bestSum };
+    }
+
+    renderStats() {
+        const stats = this.stats;
+        const standing = this.campaignStanding();
+        const info = this.getDailyInfo();
+        const average = stats.solves > 0 ?
+            stats.totalSolveSeconds / stats.solves : 0;
+
+        const tile = (value, label) => {
+            const stat = document.createElement('div');
+            stat.className = 'stat';
+            const val = document.createElement('b');
+            val.className = 'stat__value';
+            val.textContent = String(value);
+            const cap = document.createElement('span');
+            cap.className = 'stat__label';
+            cap.textContent = label;
+            stat.append(val, cap);
+            return stat;
+        };
+        const group = (name, kind, tiles) => {
+            const section = document.createElement('section');
+            section.className = `stats-group stats-group--${kind}`;
+            const heading = document.createElement('h3');
+            heading.textContent = name;
+            const grid = document.createElement('div');
+            grid.className = 'stats-grid';
+            grid.append(...tiles);
+            section.append(heading, grid);
+            return section;
+        };
+
+        this.dom.statsBody.replaceChildren(
+            group('The campaign', 'campaign', [
+                tile(`${standing.solvedLocks}/${LOCK_CAMPAIGN.length}`,
+                    'locks open'),
+                tile(standing.medals.gold, 'gold'),
+                tile(standing.medals.silver, 'silver'),
+                tile(standing.medals.bronze, 'bronze'),
+                tile(standing.bestSum > 0 ?
+                    this.fmtDuration(standing.bestSum) : '—',
+                    'sum of bests'),
+            ]),
+            group('The daily lock', 'daily', [
+                tile(info.streak, 'streak'),
+                tile(info.bestStreak, 'best streak'),
+                tile(stats.dailySolves, 'dailies solved'),
+            ]),
+            group('The grind', 'grind', [
+                tile(stats.solves, 'locks solved'),
+                tile(stats.attempts, 'circuits started'),
+                tile(stats.resets, 'restarts'),
+                tile(stats.taps, 'conductor taps'),
+                tile(stats.swaps, 'swaps banked'),
+                tile(this.fmtDuration(stats.seconds), 'time in the box'),
+                tile(stats.fastest > 0 ?
+                    `${stats.fastest.toFixed(1)}s` : '—', 'fastest solve'),
+                tile(average > 0 ?
+                    `${average.toFixed(1)}s` : '—', 'average solve'),
+            ])
+        );
     }
 
     syncTitleNote() {
@@ -488,6 +740,9 @@ class ShortCircuit {
 
     enterPuzzle() {
         this.renderedRevision = -1;
+        this.stats.attempts += 1;
+        this.saveStats();
+        this.focusBoardOnRender = this.usesKeyboard;
         this.setScreen('puzzle');
         this.sound.playConfirm();
         try { cgSdk()?.game?.gameplayStart?.(); } catch { /* optional */ }
@@ -497,6 +752,7 @@ class ShortCircuit {
         if (this.engine.state?.solved) return;
         this.engine.clear();
         this.activeDaily = null;
+        this.saveStats();
         try { cgSdk()?.game?.gameplayStop?.(); } catch { /* optional */ }
         this.showSelect();
     }
@@ -507,6 +763,15 @@ class ShortCircuit {
         const state = this.engine.state;
         if (!state?.solved) return false;
         const seconds = Math.round(state.elapsed * 10) / 10;
+        this.stats.solves += 1;
+        if (state.dailyLock) this.stats.dailySolves += 1;
+        if (Number.isFinite(state.moves)) this.stats.swaps += state.moves;
+        this.stats.totalSolveSeconds =
+            Math.round((this.stats.totalSolveSeconds + seconds) * 10) / 10;
+        if (!this.stats.fastest || seconds < this.stats.fastest) {
+            this.stats.fastest = seconds;
+        }
+        this.saveStats();
         this.lastResult = state.dailyLock ?
             this.summariseDaily(state, seconds) :
             this.summariseCampaign(state, seconds);
@@ -520,6 +785,8 @@ class ShortCircuit {
         } catch { /* optional */ }
         this.renderWon();
         this.setScreen('won');
+        // Keyboard players chain locks on Enter alone.
+        if (this.usesKeyboard) this.focusPrimary();
         return true;
     }
 
@@ -610,6 +877,9 @@ class ShortCircuit {
         if (this.screen !== 'puzzle') return;
         const state = this.engine.state;
         if (!state) return;
+        // Time in the box runs whenever a board is up; it's written to
+        // storage at the screen transitions, not every frame.
+        this.stats.seconds += dt;
 
         const previousFill = state.filled.size;
         const previousPhase = state.flowPhase;
@@ -650,6 +920,7 @@ class ShortCircuit {
         }
         if (action === 'title') { this.sound.playConfirm(); this.showTitle(); return; }
         if (action === 'select') { this.sound.playConfirm(); this.showSelect(); return; }
+        if (action === 'stats') { this.sound.playConfirm(); this.showStats(); return; }
         if (action === 'daily') { this.startDaily(); return; }
         if (action === 'start-lock') {
             this.startLock(Number(button.dataset.value));
@@ -663,6 +934,9 @@ class ShortCircuit {
         if (action.startsWith('puzzle-')) {
             const handled = this.engine.action(action, button.dataset.value);
             if (!handled) return;
+            if (action === 'puzzle-pipe') this.stats.taps += 1;
+            if (action === 'puzzle-reset') this.stats.resets += 1;
+            this.saveStats();
             const state = this.engine.state;
             if (state?.solved) {
                 this.sound.playSolveBlip();
@@ -885,6 +1159,11 @@ class ShortCircuit {
             'Uncover conductors and swap them into a route from IN to ' +
             'OUT — ahead of the current.';
         this.dom.puzzleStatus.textContent = state.status;
+        // Rebuilds destroy the focused cell, so note where the keyboard
+        // cursor stood and put it back on the fresh board below.
+        const focusedCell =
+            document.activeElement?.classList?.contains('puzzle-pipe-cell') ?
+                Number(document.activeElement.dataset.value) : null;
         this.dom.puzzleBody.replaceChildren();
         this.dom.puzzleActions.replaceChildren();
 
@@ -1102,6 +1381,13 @@ class ShortCircuit {
             );
         }
         this.syncFlow(state);
+
+        if (this.focusBoardOnRender) {
+            this.focusBoardOnRender = false;
+            this.focusBoardCell(null);
+        } else if (focusedCell !== null) {
+            this.restoreBoardFocus(focusedCell);
+        }
     }
 
     syncFlow(state) {

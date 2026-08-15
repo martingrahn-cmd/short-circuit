@@ -2280,7 +2280,7 @@
                 flex-direction: column;
                 justify-content: center;
             }
-            #screenSelect { justify-content: flex-start; }
+            #screenSelect, #screenStats { justify-content: flex-start; }
             .title-panel { justify-content: center; }
         }
 
@@ -2346,6 +2346,75 @@
             .title-logo__row2 { animation: none; }
         }
 
+        /* ── statistiken: mätartavlor på panelen ── */
+        .stats-body {
+            display: grid;
+            gap: calc(14px * var(--game-scale));
+            margin-bottom: calc(4px * var(--game-scale));
+        }
+
+        .stats-group h3 {
+            color: rgba(148, 219, 240, 0.8);
+            font: 700 max(9px, calc(10px * var(--game-scale))) / 1.4 ui-monospace, monospace;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            margin-bottom: calc(6px * var(--game-scale));
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: calc(6px * var(--game-scale));
+        }
+
+        .stat {
+            display: grid;
+            gap: 2px;
+            padding: calc(8px * var(--game-scale)) calc(6px * var(--game-scale));
+            border: 1px solid rgba(122, 150, 170, 0.16);
+            border-radius: 9px;
+            background: linear-gradient(180deg, rgba(10, 14, 22, 0.9), rgba(6, 9, 15, 0.95));
+            box-shadow: inset 0 1px rgba(0, 0, 0, 0.5), inset 0 -1px rgba(255, 255, 255, 0.03);
+            text-align: center;
+        }
+
+        .stat__value {
+            color: var(--puzzle-accent);
+            font: 800 max(15px, calc(17px * var(--game-scale))) / 1.15 ui-monospace, monospace;
+            font-variant-numeric: tabular-nums;
+            text-shadow: 0 0 10px rgba(115, 232, 246, 0.35);
+            overflow-wrap: anywhere;
+        }
+
+        .stats-group--daily .stat__value {
+            color: var(--spark);
+            text-shadow: 0 0 10px rgba(255, 205, 92, 0.4);
+        }
+
+        .stat__label {
+            color: rgba(203, 220, 240, 0.55);
+            font-size: max(8px, calc(9px * var(--game-scale)));
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+
+        @media (max-width: 340px) {
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        /* ── tangentbordstipsen: bara där ett tangentbord troligen finns ── */
+        .title-keys {
+            display: none;
+            margin-top: calc(10px * var(--game-scale));
+            color: rgba(203, 220, 240, 0.38);
+            font-size: max(9px, calc(10px * var(--game-scale)));
+        }
+        .puzzle-help__keys { display: none; }
+        @media (hover: hover) and (pointer: fine) {
+            .title-keys { display: block; }
+            .puzzle-help__keys { display: inline; }
+        }
+
         /* titeln släpper igenom canvasen: bågar, gnistor och spår syns */
         #screenTitle {
             background: linear-gradient(160deg,
@@ -2376,8 +2445,10 @@
         <p id="titleDailyNote" class="title-daily-note"></p>
         <div class="title-foot">
             <button id="muteButton" class="ghost-button" type="button" data-action="mute">Sound: on</button>
+            <button class="ghost-button" type="button" data-action="stats">Stats</button>
             <a class="ghost-button" href="https://gamevolt.io" target="_blank" rel="noopener">GameVolt</a>
         </div>
+        <p class="title-keys">Keyboard: arrows &middot; Enter &middot; R restarts &middot; Esc backs out</p>
     </section>
 
     <!-- Låsval -->
@@ -2417,7 +2488,16 @@
         <div id="puzzleBody" class="puzzle-body"></div>
         <p id="puzzleStatus" class="puzzle-status" role="status" aria-live="polite"></p>
         <div id="puzzleActions" class="menu-actions puzzle-actions"></div>
-        <p class="puzzle-help">Tap to uncover &middot; tap two conductors to swap them</p>
+        <p class="puzzle-help">Tap to uncover &middot; tap two conductors to swap them<span class="puzzle-help__keys"> &middot; or arrows + Enter</span></p>
+    </section>
+
+    <!-- Statistik -->
+    <section id="screenStats" class="screen-panel" hidden aria-labelledby="statsTitle">
+        <p class="eyebrow">Meter readings</p>
+        <h2 id="statsTitle">The stats</h2>
+        <p class="screen-copy">Everything the box has measured since you first opened it.</p>
+        <div id="statsBody" class="stats-body"></div>
+        <button class="menu-button select-back" type="button" data-action="title">Back</button>
     </section>
 
     <!-- Vinst -->
@@ -2430,9 +2510,9 @@
         <div id="puzzleWonActions" class="menu-actions"></div>
     </section>
 </div>
-<script src="sounds.js?v=5"></script>
-<script src="engine.js?v=5"></script>
-<script src="sound.js?v=5"></script>
-<script src="app.js?v=5"></script>
+<script src="sounds.js?v=6"></script>
+<script src="engine.js?v=6"></script>
+<script src="sound.js?v=6"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>
