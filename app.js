@@ -79,6 +79,7 @@ class ShortCircuit {
         this.syncMute();
         this.syncTitleNote();
         this.gameVoltInit();
+        this.initBackdrop();
 
         this.lastFrame = performance.now();
         const loop = now => {
@@ -86,12 +87,133 @@ class ShortCircuit {
             this.lastFrame = now;
             try {
                 this.update(dt);
+                this.drawBackdrop(dt);
             } catch (err) {
                 scFault('frame:' + this.screen, err);
             }
             requestAnimationFrame(loop);
         };
         requestAnimationFrame(loop);
+    }
+
+    /**
+     * A one-shot full-screen effect: the surge of a solved circuit, the
+     * brown-out of a blown one. Re-adding the class mid-run restarts it.
+     */
+    fx(name) {
+        const overlay = document.getElementById('fxOverlay');
+        if (!overlay) return;
+        overlay.classList.remove('is-surge', 'is-brownout');
+        void overlay.offsetWidth;
+        overlay.classList.add(name);
+        clearTimeout(this.fxTimer);
+        this.fxTimer = setTimeout(
+            () => overlay.classList.remove('is-surge', 'is-brownout'),
+            900
+        );
+    }
+
+    /**
+     * The backdrop: faint circuit traces etched into the dark, with a
+     * few sparks wandering along them. Pure atmosphere — behind
+     * everything, touching nothing.
+     */
+    initBackdrop() {
+        this.bgCanvas = document.getElementById('bgCircuits');
+        if (!this.bgCanvas) return;
+        this.bgCtx = this.bgCanvas.getContext('2d');
+        const build = () => {
+            const w = this.bgCanvas.width = window.innerWidth;
+            const h = this.bgCanvas.height = window.innerHeight;
+            const traces = [];
+            const seedRandom = this.engine.createRandom(
+                this.engine.hashSeed(`bg:${w}x${h}`)
+            );
+            for (let i = 0; i < 8; i++) {
+                const points = [{
+                    x: seedRandom() * w,
+                    y: seedRandom() * h,
+                }];
+                let horizontal = seedRandom() < 0.5;
+                for (let s = 0; s < 5; s++) {
+                    const last = points[points.length - 1];
+                    const run = 60 + seedRandom() * 180;
+                    const sign = seedRandom() < 0.5 ? -1 : 1;
+                    points.push(horizontal ?
+                        { x: last.x + run * sign, y: last.y } :
+                        { x: last.x, y: last.y + run * sign });
+                    horizontal = !horizontal;
+                }
+                traces.push(points);
+            }
+            this.bgTraces = traces;
+            this.bgSparks = [0, 1, 2].map(i => ({
+                trace: i % traces.length,
+                t: i * 0.33,
+                speed: 0.05 + i * 0.02,
+            }));
+            this.bgStatic = null;   // omritas
+        };
+        build();
+        window.addEventListener('resize', build);
+    }
+
+    drawBackdrop(dt) {
+        const ctx = this.bgCtx;
+        if (!ctx || !this.bgTraces) return;
+        const w = this.bgCanvas.width;
+        const h = this.bgCanvas.height;
+        ctx.clearRect(0, 0, w, h);
+
+        ctx.lineWidth = 1.2;
+        ctx.strokeStyle = 'rgba(115, 232, 246, 0.05)';
+        ctx.fillStyle = 'rgba(115, 232, 246, 0.09)';
+        this.bgTraces.forEach(points => {
+            ctx.beginPath();
+            points.forEach((pt, i) =>
+                i === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y));
+            ctx.stroke();
+            points.forEach(pt => {
+                ctx.beginPath();
+                ctx.arc(pt.x, pt.y, 1.6, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        });
+
+        if (this.reducedMotion) return;
+        this.bgSparks.forEach(spark => {
+            // Ornament heals itself: a spark in a bad state restarts
+            // rather than ever costing a frame.
+            if (!Number.isFinite(spark.t)) spark.t = 0;
+            spark.t += dt * spark.speed;
+            if (spark.t >= 1) {
+                spark.t = 0;
+                spark.trace = (spark.trace + 1) % this.bgTraces.length;
+            }
+            const points = this.bgTraces[spark.trace];
+            if (!points || points.length < 2) { spark.trace = 0; return; }
+            const eased = spark.t * (points.length - 1);
+            const index = Math.max(
+                0, Math.min(points.length - 2, Math.floor(eased))
+            );
+            const local = eased - index;
+            const a = points[index];
+            const b = points[index + 1];
+            if (!a || !b) { spark.t = 0; return; }
+            const x = a.x + (b.x - a.x) * local;
+            const y = a.y + (b.y - a.y) * local;
+            const glow = ctx.createRadialGradient(x, y, 0, x, y, 26);
+            glow.addColorStop(0, 'rgba(255, 205, 92, 0.28)');
+            glow.addColorStop(1, 'rgba(255, 205, 92, 0)');
+            ctx.fillStyle = glow;
+            ctx.beginPath();
+            ctx.arc(x, y, 26, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'rgba(255, 236, 180, 0.85)';
+            ctx.beginPath();
+            ctx.arc(x, y, 1.6, 0, Math.PI * 2);
+            ctx.fill();
+        });
     }
 
     // ── storage ──
@@ -248,6 +370,7 @@ class ShortCircuit {
             this.summariseCampaign(state, seconds);
         this.engine.clear();
         this.activeDaily = null;
+        this.fx('is-surge');
         this.sound.playTriumph();
         try {
             cgSdk()?.game?.gameplayStop?.();
@@ -355,6 +478,7 @@ class ShortCircuit {
         }
         if (state.filled.size > previousFill) this.sound.playCircuitStep();
         if (previousPhase !== 'failed' && state.flowPhase === 'failed') {
+            this.fx('is-brownout');
             this.sound.playCircuitFail();
         }
 
