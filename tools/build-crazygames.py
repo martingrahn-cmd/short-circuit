@@ -1,13 +1,16 @@
 """Builds the CrazyGames submission zip.
 
-The only difference from the plain game is one script tag: the CrazyGames
-SDK, which app.js treats as optional everywhere. The tag lives here rather
-than in index.html so the GitHub Pages and artifact builds keep their
+Two differences from the plain game: the CrazyGames SDK script tag goes
+in (app.js treats it as optional everywhere), and the GameVolt link on
+the title screen comes out — CrazyGames QA rejects external links, and
+links to other game portals most of all. The tag lives here rather than
+in index.html so the GitHub Pages and artifact builds keep their
 zero-external-requests property.
 
 Usage: python3 tools/build-crazygames.py [out.zip]
 """
 import pathlib
+import re
 import sys
 import tempfile
 import zipfile
@@ -25,6 +28,14 @@ anchor = '<script src="sounds.js'
 if anchor not in html:
     raise SystemExit('script anchor not found in index.html')
 html = html.replace(anchor, SDK_TAG + anchor, 1)
+
+html, removed = re.subn(
+    r'[ \t]*<a[^>]*href="https://gamevolt\.io"[^>]*>.*?</a>\n?', '', html
+)
+if removed != 1:
+    raise SystemExit(f'expected 1 GameVolt link to strip, found {removed}')
+if 'gamevolt.io' in html:
+    raise SystemExit('a gamevolt.io reference survived the strip')
 
 with tempfile.TemporaryDirectory() as tmp:
     stage = pathlib.Path(tmp) / 'game'
