@@ -1178,14 +1178,15 @@ class ShortCircuit {
 
     // ── starting locks ──
 
-    startLock(lock) {
+    startLock(lock, forceTeaching = false) {
         if (
             !Number.isInteger(lock) || lock < 1 ||
             lock > LOCK_CAMPAIGN.length || !this.isLockUnlocked(lock)
         ) return false;
         const entry = LOCK_CAMPAIGN[lock - 1];
         // The very first lock ever is a lesson: its current crawls.
-        const teaching = !this.hasSeenLock();
+        // "How to play" re-runs that lesson on demand, guide and all.
+        const teaching = forceTeaching || !this.hasSeenLock();
         this.activeDaily = null;
         this.engine.start('pipes', entry.lock, entry.seed, {
             teaching,
@@ -1484,6 +1485,11 @@ class ShortCircuit {
             return;
         }
         if (action === 'first-circuit') { this.startLock(1); return; }
+        if (action === 'how-to') {
+            this.sound.playConfirm();
+            this.startLock(1, true);
+            return;
+        }
         if (action === 'daily') { this.startDaily(); return; }
         if (action === 'start-lock') {
             this.startLock(Number(button.dataset.value));
