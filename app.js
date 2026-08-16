@@ -174,6 +174,18 @@ class ShortCircuit {
 
         this.syncMute();
         this.syncTitleNote();
+        // The platform's own mute sits on top of the user's: the site
+        // button silences the game without touching the saved preference.
+        const cgGame = cgSdk()?.game;
+        if (cgGame?.settings) {
+            const applyPlatform = settings => {
+                this.sound.platformMuted = settings?.muteAudio === true;
+            };
+            try {
+                applyPlatform(cgGame.settings);
+                cgGame.addSettingsChangeListener?.(applyPlatform);
+            } catch { /* platform optional, always */ }
+        }
         this.gameVoltInit();
         this.checkTrophies({}, { silent: true });
         this.initNet();
