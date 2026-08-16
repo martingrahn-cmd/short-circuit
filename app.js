@@ -121,6 +121,8 @@ class ShortCircuit {
         this.duel = null;               // live-duel state while in Versus
         this.duelHudText = '';
         this.trophies = this.loadJson(SC_KEYS.trophies);
+        this.lastAdAt = performance.now();   // ingen annons direkt vid boot
+        this.solvesSinceAd = 0;
         this.trophyQueue = [];
         this.trophyShowing = false;
         this.lockResets = 0;            // restarts on the current board
@@ -1489,9 +1491,36 @@ class ShortCircuit {
         this.renderWon();
         this.setScreen('won');
         this.celebrateBackdrop();
+        this.solvesSinceAd += 1;
+        this.maybeMidgameAd(winCtx.teaching);
         // Keyboard players chain locks on Enter alone.
         if (this.usesKeyboard) this.focusPrimary();
         return true;
+    }
+
+    /**
+     * A midgame ad at the natural break: on the won screen, never in a
+     * duel, never on the teaching board, at most every third solve and
+     * three minutes apart. Sound ducks through platformMuted while the
+     * ad runs, so the player's own mute choice is never overwritten.
+     */
+    maybeMidgameAd(teaching) {
+        const sdk = cgSdk();
+        if (!sdk?.ad?.requestAd || teaching || this.duel) return;
+        const now = performance.now();
+        if (this.solvesSinceAd < 3 || now - this.lastAdAt < 180000) return;
+        this.lastAdAt = now;
+        this.solvesSinceAd = 0;
+        const restore = () => { this.sound.platformMuted = false; };
+        try {
+            sdk.ad.requestAd('midgame', {
+                adStarted: () => { this.sound.platformMuted = true; },
+                adFinished: restore,
+                adError: restore,
+            });
+        } catch {
+            restore();
+        }
     }
 
     summariseCampaign(state, seconds) {
