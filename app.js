@@ -11,6 +11,7 @@ const SC_KEYS = Object.freeze({
     daily: 'short-circuit:daily',
     seen: 'short-circuit:lock-seen',
     stats: 'short-circuit:stats',
+    trophies: 'short-circuit:trophies',
 });
 
 // Every counter the box keeps. Merged over whatever is stored, so a
@@ -32,6 +33,56 @@ const SC_STAT_ZEROES = Object.freeze({
     slams: 0,           // breaker slams
     misfires: 0,        // slams on a broken circuit
 });
+
+// GameVolt house standard: 31 trophies — 15 bronze, 10 silver, 5 gold
+// and one platinum that unlocks itself when every other is earned.
+// `when` reads a snapshot: st = stats, standing = campaign medals/locks,
+// daily = streak info, ctx = facts about the solve that just happened.
+const SC_TROPHIES = [
+    // bronze (15)
+    { id: 'first-spark', tier: 'bronze', name: 'FIRST SPARK', desc: 'Close your first circuit', when: s => s.st.solves >= 1 },
+    { id: 'three-open', tier: 'bronze', name: 'THREE OPEN', desc: 'Open three campaign locks', when: s => s.standing.solvedLocks >= 3 },
+    { id: 'six-open', tier: 'bronze', name: 'SIX OPEN', desc: 'Open six campaign locks', when: s => s.standing.solvedLocks >= 6 },
+    { id: 'day-one', tier: 'bronze', name: 'DAY ONE', desc: 'Solve a daily lock', when: s => s.st.dailySolves >= 1 },
+    { id: 'three-days', tier: 'bronze', name: 'THREE DAYS LIVE', desc: 'Reach a 3-day daily streak', when: s => s.daily.bestStreak >= 3 },
+    { id: 'podium', tier: 'bronze', name: 'ON THE PODIUM', desc: 'Earn any medal time', when: s => s.medalTotal >= 1 },
+    { id: 'medal-drawer', tier: 'bronze', name: 'MEDAL DRAWER', desc: 'Earn five medal times', when: s => s.medalTotal >= 5 },
+    { id: 'busy-fingers', tier: 'bronze', name: 'BUSY FINGERS', desc: 'Press 100 conductors', when: s => s.st.taps >= 100 },
+    { id: 'switchboard', tier: 'bronze', name: 'SWITCHBOARD', desc: 'Bank 50 swaps', when: s => s.st.swaps >= 50 },
+    { id: 'through-gold', tier: 'bronze', name: 'ROUTED THROUGH GOLD', desc: 'Beat a lock with welded conductors', when: s => s.ctx.won && s.ctx.anchors > 0 },
+    { id: 'big-board', tier: 'bronze', name: 'THE BIG BOARD', desc: 'Solve a 6×6 circuit', when: s => s.ctx.won && s.ctx.size >= 6 },
+    { id: 'worn-open', tier: 'bronze', name: 'WORN BUT OPEN', desc: 'Win a lock after a restart', when: s => s.ctx.won && s.ctx.resets > 0 },
+    { id: 'hands-on-keys', tier: 'bronze', name: 'HANDS ON KEYS', desc: 'Solve a lock on the keyboard', when: s => s.ctx.won && s.ctx.viaKeyboard },
+    { id: 'schooled', tier: 'bronze', name: 'SCHOOLED', desc: 'Finish the teaching circuit', when: s => s.ctx.won && s.ctx.teaching },
+    { id: 'shift-worker', tier: 'bronze', name: 'SHIFT WORKER', desc: '15 minutes in the box', when: s => s.st.seconds >= 900 },
+    // silver (10)
+    { id: 'halfway-in', tier: 'silver', name: 'HALFWAY IN', desc: 'Open twelve campaign locks', when: s => s.standing.solvedLocks >= 12 },
+    { id: 'deep-panels', tier: 'silver', name: 'DEEP PANELS', desc: 'Open eighteen campaign locks', when: s => s.standing.solvedLocks >= 18 },
+    { id: 'week-live', tier: 'silver', name: 'ONE WEEK LIVE', desc: 'Reach a 7-day daily streak', when: s => s.daily.bestStreak >= 7 },
+    { id: 'golden-touch', tier: 'silver', name: 'GOLDEN TOUCH', desc: 'Earn a gold medal time', when: s => s.standing.medals.gold >= 1 },
+    { id: 'shinework', tier: 'silver', name: 'SHINEWORK', desc: 'Five silver-or-better medals', when: s => s.standing.medals.gold + s.standing.medals.silver >= 5 },
+    { id: 'ten-flat', tier: 'silver', name: 'TEN FLAT', desc: 'Solve a lock in under 10 seconds', when: s => s.st.fastest > 0 && s.st.fastest < 10 },
+    { id: 'first-blood', tier: 'silver', name: 'FIRST BLOOD', desc: 'Win a live duel', when: s => s.st.duelWins >= 1 },
+    { id: 'trigger-finger', tier: 'silver', name: 'TRIGGER FINGER', desc: 'Slam the breaker 25 times', when: s => s.st.slams >= 25 },
+    { id: 'regular', tier: 'silver', name: 'REGULAR', desc: 'Solve ten daily locks', when: s => s.st.dailySolves >= 10 },
+    { id: 'long-shift', tier: 'silver', name: 'THE LONG SHIFT', desc: 'An hour in the box', when: s => s.st.seconds >= 3600 },
+    // gold (5)
+    { id: 'all-panels', tier: 'gold', name: 'ALL PANELS OPEN', desc: 'Clear all 24 campaign locks', when: s => s.standing.solvedLocks >= 24 },
+    { id: 'gilded-dozen', tier: 'gold', name: 'GILDED DOZEN', desc: 'Twelve gold medal times', when: s => s.standing.medals.gold >= 12 },
+    { id: 'month-live', tier: 'gold', name: 'A MONTH LIVE', desc: 'Reach a 30-day daily streak', when: s => s.daily.bestStreak >= 30 },
+    { id: 'duelist', tier: 'gold', name: 'DUELIST', desc: 'Win ten live duels', when: s => s.st.duelWins >= 10 },
+    { id: 'five-flat', tier: 'gold', name: 'FIVE FLAT', desc: 'Solve a lock in under 5 seconds', when: s => s.st.fastest > 0 && s.st.fastest < 5 },
+    // platinum (1)
+    { id: 'master', tier: 'platinum', name: 'MASTER ELECTRICIAN', desc: 'Unlock every other trophy', when: () => false },
+];
+
+const SC_TIER_ORDER = ['bronze', 'silver', 'gold', 'platinum'];
+const SC_TIER_META = {
+    bronze: { label: 'BRONZE', color: '#cd7f32' },
+    silver: { label: 'SILVER', color: '#c9d3e0' },
+    gold: { label: 'GOLD', color: '#ffd23f' },
+    platinum: { label: 'PLATINUM', color: '#7df9ff' },
+};
 
 const scStore = {
     get(key) {
@@ -69,6 +120,10 @@ class ShortCircuit {
         this.focusBoardOnRender = false;
         this.duel = null;               // live-duel state while in Versus
         this.duelHudText = '';
+        this.trophies = this.loadJson(SC_KEYS.trophies);
+        this.trophyQueue = [];
+        this.trophyShowing = false;
+        this.lockResets = 0;            // restarts on the current board
         this.lastResult = null;
         this.activeDaily = null;         // dateKey while a daily is live
         this.renderedRevision = -1;
@@ -84,7 +139,8 @@ class ShortCircuit {
             'screenStats', 'statsBody',
             'screenVersus', 'versusCode', 'versusJoinInput', 'versusStatus',
             'versusHud', 'versusScore', 'versusRival',
-            'titleFirst', 'titleDaily',
+            'titleFirst', 'titleDaily', 'trophyCount', 'trophyBody',
+            'screenTrophies',
             'titleDailyNote', 'muteButton', 'dailyRow', 'campaignRows',
             'puzzleEyebrow', 'puzzleDifficulty', 'puzzleTitle', 'puzzleCopy',
             'puzzleBody', 'puzzleStatus', 'puzzleActions',
@@ -117,6 +173,7 @@ class ShortCircuit {
         this.syncMute();
         this.syncTitleNote();
         this.gameVoltInit();
+        this.checkTrophies({}, { silent: true });
         this.initNet();
         this.initBackdrop();
 
@@ -171,6 +228,7 @@ class ShortCircuit {
             if (this.screen === 'puzzle') this.leavePuzzle();
             else if (this.screen === 'select') this.showTitle();
             else if (this.screen === 'stats') this.showTitle();
+            else if (this.screen === 'trophies') this.showTitle();
             else if (this.screen === 'versus') {
                 window.SCNet?.leave();
                 this.duel = null;
@@ -475,6 +533,7 @@ class ShortCircuit {
         d.slamTime = Math.round(state.elapsed * 10) / 10;
         this.stats.slams += 1;
         this.saveStats();
+        this.checkTrophies({});
         this.netSend('slam', {});
         this.renderedRevision = -1;     // rebuild: the board goes hands-off
         if (this.engine.isPipeRouteComplete(state)) {
@@ -555,6 +614,7 @@ class ShortCircuit {
             d.myScore += 1;
             this.stats.duelRoundWins += 1;
             this.saveStats();
+            this.checkTrophies({});
         } else if (winner === 'rival') {
             d.rivalScore += 1;
         }
@@ -582,6 +642,7 @@ class ShortCircuit {
         this.stats.duels += 1;
         if (won) this.stats.duelWins += 1;
         this.saveStats();
+        this.checkTrophies({});
         if (won) { this.fx('is-surge'); this.sound.playTriumph(); }
         else { this.sound.playCircuitFail(); }
         this.renderDuelMatch(won,
@@ -973,6 +1034,147 @@ class ShortCircuit {
         scStore.set(SC_KEYS.stats, JSON.stringify(this.stats));
     }
 
+    // ── the trophy cabinet ──
+
+    saveTrophies() {
+        scStore.set(SC_KEYS.trophies, JSON.stringify(this.trophies));
+    }
+
+    trophyCount() {
+        return SC_TROPHIES.filter(t => this.trophies[t.id]).length;
+    }
+
+    /** Everything a trophy condition may ask about, in one snapshot. */
+    trophySnapshot(ctx) {
+        const standing = this.campaignStanding();
+        return {
+            st: this.stats,
+            standing,
+            medalTotal: standing.medals.gold + standing.medals.silver +
+                standing.medals.bronze,
+            daily: this.getDailyInfo(),
+            ctx,
+        };
+    }
+
+    checkTrophies(ctx = {}, options = {}) {
+        const snap = this.trophySnapshot(ctx);
+        SC_TROPHIES.forEach(trophy => {
+            if (this.trophies[trophy.id]) return;
+            let earned = false;
+            try {
+                earned = trophy.when(snap) === true;
+            } catch { /* a broken condition must never break play */ }
+            if (earned) this.unlockTrophy(trophy.id, options);
+        });
+    }
+
+    unlockTrophy(id, { silent = false } = {}) {
+        if (this.trophies[id]) return false;
+        const def = SC_TROPHIES.find(t => t.id === id);
+        if (!def) return false;
+        this.trophies[id] = Date.now();
+        this.saveTrophies();
+        // Cloud suppression: earned on another device → no re-toast here.
+        const cloudHeld =
+            window.GameVolt?.achievements?.isUnlocked?.(id) === true;
+        try { window.GameVolt?.achievements?.unlock?.(id); } catch { }
+        if (!silent && !cloudHeld) this.trophyToast(def);
+        if (this.screen === 'trophies') this.renderTrophies();
+        // The platinum takes itself once everything else is held.
+        if (id !== 'master' &&
+            SC_TROPHIES.every(t => t.id === 'master' || this.trophies[t.id])) {
+            this.unlockTrophy('master', { silent });
+        }
+        return true;
+    }
+
+    trophyToast(def) {
+        this.trophyQueue.push(def);
+        if (!this.trophyShowing) this.nextTrophyToast();
+    }
+
+    nextTrophyToast() {
+        const def = this.trophyQueue.shift();
+        const el = document.getElementById('trophyToast');
+        if (!def || !el) { this.trophyShowing = false; return; }
+        this.trophyShowing = true;
+        const meta = SC_TIER_META[def.tier];
+        el.replaceChildren();
+        const pokal = document.createElement('i');
+        pokal.className = `tc-pokal tc-pokal--${def.tier}`;
+        pokal.setAttribute('aria-hidden', 'true');
+        const text = document.createElement('span');
+        const label = document.createElement('b');
+        label.style.color = meta.color;
+        label.textContent = `TROPHY UNLOCKED · ${meta.label}`;
+        const name = document.createElement('strong');
+        name.textContent = def.name;
+        const desc = document.createElement('small');
+        desc.textContent = def.desc;
+        text.append(label, name, desc);
+        el.append(pokal, text);
+        el.hidden = false;
+        el.classList.remove('show');
+        void el.offsetWidth;
+        el.classList.add('show');
+        if (def.tier === 'platinum') this.sound.playTriumph();
+        else if (def.tier === 'gold') this.sound.playSurge();
+        else this.sound.playSolveBlip();
+        clearTimeout(this.trophyTimer);
+        this.trophyTimer = setTimeout(() => {
+            el.classList.remove('show');
+            setTimeout(() => {
+                if (!this.trophyQueue.length) el.hidden = true;
+                this.nextTrophyToast();
+            }, 400);
+        }, 2600);
+    }
+
+    showTrophies() {
+        this.engine.clear();
+        this.activeDaily = null;
+        this.checkTrophies({});          // tidströfeer kan ha mognat i tysthet
+        this.renderTrophies();
+        this.setScreen('trophies');
+    }
+
+    renderTrophies() {
+        this.dom.trophyCount.textContent =
+            `${this.trophyCount()} / ${SC_TROPHIES.length} unlocked`;
+        this.dom.trophyBody.replaceChildren(...SC_TIER_ORDER.map(tier => {
+            const items = SC_TROPHIES.filter(t => t.tier === tier);
+            const got = items.filter(t => this.trophies[t.id]).length;
+            const section = document.createElement('section');
+            section.className = 'trophy-tier';
+            const head = document.createElement('h3');
+            head.style.color = SC_TIER_META[tier].color;
+            head.textContent =
+                `${SC_TIER_META[tier].label} · ${got}/${items.length}`;
+            const grid = document.createElement('div');
+            grid.className = 'trophy-grid';
+            items.forEach(def => {
+                const on = !!this.trophies[def.id];
+                const card = document.createElement('div');
+                card.className = 'trophy-card' + (on ? ' on' : '');
+                const pokal = document.createElement('i');
+                // Locked = the same cup in dead metal. A silhouette is a
+                // goal; a padlock is just a padlock.
+                pokal.className = `tc-pokal tc-pokal--${def.tier}` +
+                    (on ? '' : ' is-locked');
+                pokal.setAttribute('aria-hidden', 'true');
+                const name = document.createElement('b');
+                name.textContent = def.name;
+                const desc = document.createElement('small');
+                desc.textContent = def.desc;
+                card.append(pokal, name, desc);
+                grid.append(card);
+            });
+            section.append(head, grid);
+            return section;
+        }));
+    }
+
     getBest(lock) {
         const value = this.bests[`pipes:${lock}`];
         return Number.isFinite(value) && value > 0 ? value : 0;
@@ -1027,6 +1229,7 @@ class ShortCircuit {
         this.dom.screenWon.hidden = name !== 'won';
         this.dom.screenStats.hidden = name !== 'stats';
         this.dom.screenVersus.hidden = name !== 'versus';
+        this.dom.screenTrophies.hidden = name !== 'trophies';
         this.syncDuelHud();
     }
 
@@ -1213,6 +1416,7 @@ class ShortCircuit {
 
     enterPuzzle() {
         this.renderedRevision = -1;
+        this.lockResets = 0;
         this.stats.attempts += 1;
         this.saveStats();
         this.focusBoardOnRender = this.usesKeyboard;
@@ -1227,6 +1431,7 @@ class ShortCircuit {
         this.engine.clear();
         this.activeDaily = null;
         this.saveStats();
+        this.checkTrophies({});
         try { cgSdk()?.game?.gameplayStop?.(); } catch { /* optional */ }
         this.showSelect();
     }
@@ -1261,9 +1466,18 @@ class ShortCircuit {
             this.stats.fastest = seconds;
         }
         this.saveStats();
+        const winCtx = {
+            won: true,
+            teaching: state.teaching === true,
+            size: state.size,
+            anchors: state.anchors?.length ?? 0,
+            resets: this.lockResets,
+            viaKeyboard: this.usesKeyboard,
+        };
         this.lastResult = state.dailyLock ?
             this.summariseDaily(state, seconds) :
             this.summariseCampaign(state, seconds);
+        this.checkTrophies(winCtx);
         this.engine.clear();
         this.activeDaily = null;
         this.fx('is-surge');
@@ -1462,6 +1676,7 @@ class ShortCircuit {
         if (action === 'title') { this.sound.playConfirm(); this.showTitle(); return; }
         if (action === 'select') { this.sound.playConfirm(); this.showSelect(); return; }
         if (action === 'stats') { this.sound.playConfirm(); this.showStats(); return; }
+        if (action === 'trophies') { this.sound.playConfirm(); this.showTrophies(); return; }
         if (action === 'versus') { this.sound.playConfirm(); this.showVersus(); return; }
         if (action === 'versus-host') { this.duelHost(); return; }
         if (action === 'versus-join') { this.duelJoin(); return; }
@@ -1506,7 +1721,10 @@ class ShortCircuit {
             const handled = this.engine.action(action, button.dataset.value);
             if (!handled) return;
             if (action === 'puzzle-pipe') this.stats.taps += 1;
-            if (action === 'puzzle-reset') this.stats.resets += 1;
+            if (action === 'puzzle-reset') {
+                this.stats.resets += 1;
+                this.lockResets += 1;
+            }
             this.saveStats();
             const state = this.engine.state;
             if (state?.solved) {

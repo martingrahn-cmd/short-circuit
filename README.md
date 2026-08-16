@@ -27,6 +27,12 @@ now a game of its own.
   the route. Slam a broken circuit and the round is lost on the spot.
 - **Stats** — meter readings for everything the box has measured: campaign
   standing, medals, streaks, duels, slams, misfires, time in the box.
+- **The trophy cabinet** — 31 trophies in the GameVolt house standard:
+  15 bronze, 10 silver, 5 gold and one platinum that unlocks itself when
+  every other is held. The same cup in every tier — it grows and glows
+  with the metal, and a locked trophy is the cup in dead metal, not a
+  padlock. `tools/short-circuit-achievements.sql` registers all 31 in
+  the portal at release time.
 
 Touch-first (tap to uncover, tap two conductors to swap), fully keyboard
 playable (arrows, Enter, R, Esc), no download, no account.
