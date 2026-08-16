@@ -1779,7 +1779,10 @@ class ShortCircuit {
         for (const position of route) {
             const resident = state.cells[position];
             if (!resident.revealed) {
-                return { stage: 'uncover', targets: [position] };
+                return {
+                    stage: 'uncover',
+                    targets: [{ index: position, role: 'tap' }],
+                };
             }
             if (resident.welded || resident.solutionIndex === position) {
                 continue;
@@ -1788,19 +1791,76 @@ class ShortCircuit {
                 cell.solutionIndex === position && !cell.welded);
             if (from < 0) return null;
             if (!state.cells[from].revealed) {
-                return { stage: 'uncover', targets: [from] };
+                return {
+                    stage: 'uncover',
+                    targets: [{ index: from, role: 'tap' }],
+                };
             }
             if (state.selectedIndex === position ||
                 state.selectedIndex === from) {
                 return {
                     stage: 'swap',
-                    targets: [state.selectedIndex === position ?
-                        from : position],
+                    targets: [{
+                        index: state.selectedIndex === position ?
+                            from : position,
+                        role: 'swap',
+                    }],
                 };
             }
-            return { stage: 'swap', targets: [from, position] };
+            // Full instruction: take THIS conductor, put it THERE.
+            return {
+                stage: 'swap',
+                targets: [
+                    { index: from, role: 'take' },
+                    { index: position, role: 'put' },
+                ],
+            };
         }
         return { stage: 'watch', targets: [] };
+    }
+
+    /**
+     * The arc from "take" to "put here": a dashed amber line drawn over
+     * the board, flowing toward the destination, with an arrowhead.
+     * Coordinates are read after layout, so the line lands exactly.
+     */
+    drawGuideLink(board, [takeCell, putCell]) {
+        if (!takeCell || !putCell) return;
+        const boardRect = board.getBoundingClientRect();
+        if (!boardRect.width) return;
+        const centre = cell => {
+            const r = cell.getBoundingClientRect();
+            return {
+                x: r.left + r.width / 2 - boardRect.left,
+                y: r.top + r.height / 2 - boardRect.top,
+            };
+        };
+        const a = centre(takeCell);
+        const b = centre(putCell);
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len = Math.hypot(dx, dy) || 1;
+        // kontrollpunkten viker av vinkelrätt: en båge, inte ett streck
+        const bend = Math.min(34, len * 0.25);
+        const cx = (a.x + b.x) / 2 - (dy / len) * bend;
+        const cy = (a.y + b.y) / 2 + (dx / len) * bend;
+        // pilspetsen: riktningen i bågens slut är kontrollpunkt → mål
+        const tipAngle = Math.atan2(b.y - cy, b.x - cx);
+        const tip = (angle, dist) => `${b.x - Math.cos(angle) * dist},` +
+            `${b.y - Math.sin(angle) * dist}`;
+        const svgNS = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.classList.add('guide-link');
+        svg.setAttribute('viewBox', `0 0 ${boardRect.width} ${boardRect.height}`);
+        svg.setAttribute('aria-hidden', 'true');
+        const path = document.createElementNS(svgNS, 'path');
+        path.setAttribute('d',
+            `M ${a.x} ${a.y} Q ${cx} ${cy} ${b.x} ${b.y}`);
+        const head = document.createElementNS(svgNS, 'polygon');
+        head.setAttribute('points', `${b.x},${b.y} ` +
+            tip(tipAngle - 0.42, 13) + ' ' + tip(tipAngle + 0.42, 13));
+        svg.append(path, head);
+        board.append(svg);
     }
 
     renderPuzzle(state) {
@@ -1972,17 +2032,21 @@ class ShortCircuit {
         this.weldRefusalRendered = state.refusalTick;
 
         const guide = this.teachingGuide(state);
+        this.guidePair = null;
         if (guide) {
-            guide.targets.forEach(index => {
-                const cell = this.pipeCells[index];
+            const chip = { tap: 'TAP', take: 'TAKE', put: 'PUT HERE', swap: 'SWAP' };
+            shell.classList.toggle('has-guide', guide.targets.length > 0);
+            guide.targets.forEach(target => {
+                const cell = this.pipeCells[target.index];
                 if (!cell) return;
-                cell.classList.add('is-guided');
-                cell.classList.toggle(
-                    'is-guided--swap', guide.stage === 'swap'
-                );
-                cell.dataset.guide =
-                    guide.stage === 'swap' ? 'SWAP' : 'TAP';
+                cell.classList.add('is-guided', `is-guided--${target.role}`);
+                cell.dataset.guide = chip[target.role];
             });
+            if (guide.targets.length === 2) {
+                this.guidePair = guide.targets.map(
+                    target => this.pipeCells[target.index]
+                );
+            }
         }
 
         // Solved: the win wave rides the route order — each cell knows
@@ -2056,6 +2120,7 @@ class ShortCircuit {
         if (failureBanner) shell.append(failureBanner);
         shell.append(legend, board);
         this.dom.puzzleBody.append(shell);
+        if (this.guidePair) this.drawGuideLink(board, this.guidePair);
 
         if (this.duel) {
             // A duel has no restarts and no way back — only the breaker
