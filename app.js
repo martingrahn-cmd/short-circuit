@@ -84,11 +84,27 @@ const SC_TIER_META = {
     platinum: { label: 'PLATINUM', color: '#7df9ff' },
 };
 
+// All saves go through one door. On CrazyGames that door is the SDK's
+// data module — a localStorage-shaped store that follows the player's
+// CrazyGames account across devices (plain localStorage everywhere else,
+// and the module itself falls back to local when the player is logged
+// out). The SDK is initialised before the game constructs, so the
+// backend is stable by first read.
 const scStore = {
+    backend() {
+        return cgSdk()?.data ?? null;
+    },
     get(key) {
-        try { return localStorage.getItem(key); } catch { return null; }
+        try {
+            const cloud = this.backend();
+            return cloud ? cloud.getItem(key) : localStorage.getItem(key);
+        } catch { return null; }
     },
     set(key, value) {
+        try {
+            const cloud = this.backend();
+            if (cloud) { cloud.setItem(key, value); return; }
+        } catch { /* fall through to local */ }
         try { localStorage.setItem(key, value); } catch { /* still playable */ }
     },
 };
