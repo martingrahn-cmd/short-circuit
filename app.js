@@ -156,6 +156,7 @@ class ShortCircuit {
             'screenTitle', 'screenSelect', 'screenPuzzle', 'screenWon',
             'screenStats', 'statsBody',
             'screenVersus', 'versusCode', 'versusJoinInput', 'versusStatus',
+            'versusInvite',
             'versusHud', 'versusScore', 'versusRival',
             'titleFirst', 'titleDaily', 'trophyCount', 'trophyBody',
             'screenTrophies',
@@ -205,6 +206,7 @@ class ShortCircuit {
         this.gameVoltInit();
         this.checkTrophies({}, { silent: true });
         this.initNet();
+        this.cgMultiplayerInit();
         this.initBackdrop();
 
         this.lastFrame = performance.now();
@@ -261,6 +263,7 @@ class ShortCircuit {
             else if (this.screen === 'trophies') this.showTitle();
             else if (this.screen === 'versus') {
                 window.SCNet?.leave();
+                this.cgLeftRoom();
                 this.duel = null;
                 this.showTitle();
             }
@@ -404,12 +407,83 @@ class ShortCircuit {
         try { window.SCNet?.send(type, payload); } catch { /* best effort */ }
     }
 
+    // ── CrazyGames multiplayer glue: room data + invite links ──
+
+    /** Tell the platform about our room so its invite UI can work. */
+    cgRoom(joinable) {
+        const d = this.duel;
+        try {
+            cgSdk()?.game?.updateRoom?.({
+                roomId: d?.code ?? null,
+                isJoinable: joinable === true,
+                inviteParams: d ? { roomId: d.code } : undefined,
+            });
+        } catch { /* platform optional, always */ }
+    }
+
+    cgLeftRoom() {
+        try { cgSdk()?.game?.leftRoom?.(); } catch { /* optional */ }
+    }
+
+    async cgCopyInvite() {
+        const d = this.duel;
+        const game = cgSdk()?.game;
+        if (!d?.code || !game?.inviteLink) return;
+        try {
+            const link = await Promise.resolve(
+                game.inviteLink({ roomId: d.code })
+            );
+            try { await navigator.clipboard.writeText(link); } catch { }
+            this.dom.versusStatus.textContent =
+                'Invite link copied — send it to a rival!';
+        } catch {
+            this.dom.versusStatus.textContent =
+                'Could not build the invite link.';
+        }
+    }
+
+    /**
+     * Invite-driven arrivals: a click on an invite link joins that room
+     * directly, and an instant-multiplayer launch hosts one — the party
+     * leader lands in a joinable location with the code up.
+     */
+    cgMultiplayerInit() {
+        const game = cgSdk()?.game;
+        if (!game) return;
+        try {
+            game.addJoinRoomListener?.(params => {
+                try {
+                    const code = String(params?.roomId ?? '').trim();
+                    if (code) this.duelJoinByInvite(code);
+                } catch (err) {
+                    scFault('cg:join', err);
+                }
+            });
+        } catch { /* optional */ }
+        let inviteCode = null;
+        try { inviteCode = game.getInviteParam?.('roomId'); } catch { }
+        if (inviteCode) {
+            this.duelJoinByInvite(String(inviteCode));
+        } else if (game.isInstantMultiplayer === true) {
+            this.showVersus();
+            this.duelHost();
+        }
+    }
+
+    duelJoinByInvite(code) {
+        this.showVersus();
+        this.dom.versusJoinInput.value =
+            code.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+        this.duelJoin();
+    }
+
     showVersus() {
         this.engine.clear();
         this.activeDaily = null;
         this.duel = null;
         this.duelHudText = '';
         this.dom.versusCode.hidden = true;
+        this.dom.versusInvite.hidden = true;
         this.dom.versusStatus.textContent = window.SCNet ?
             '' : 'Versus needs net.js — reload the page.';
         this.setScreen('versus');
@@ -423,6 +497,8 @@ class ShortCircuit {
             this.duel = this.freshDuel('host', code);
             this.dom.versusCode.textContent = code;
             this.dom.versusCode.hidden = false;
+            this.dom.versusInvite.hidden = !cgSdk()?.game?.inviteLink;
+            this.cgRoom(true);
             this.dom.versusStatus.textContent =
                 'Share the code — waiting for a rival…';
         }).catch(() => {
@@ -467,6 +543,7 @@ class ShortCircuit {
         if (!d) return;
         this.sound.playConfirm();
         if (d.role === 'host') {
+            this.cgRoom(false);        // 1v1: rummet är fullt nu
             this.dom.versusStatus.textContent = 'Rival connected — dealing the boards…';
             this.duelSetupMatch();
         } else {
@@ -701,6 +778,7 @@ class ShortCircuit {
             return;
         }
         d.phase = 'gone';
+        this.cgLeftRoom();
         this.engine.clear();
         this.stats.duels += 1;
         this.stats.duelWins += 1;
@@ -712,6 +790,7 @@ class ShortCircuit {
     duelForfeit() {
         const d = this.duel;
         window.SCNet?.leave();
+        this.cgLeftRoom();
         if (d && d.started && d.phase !== 'matchEnd' && d.phase !== 'gone') {
             this.stats.duels += 1;    // a forfeit counts as a finished duel
             this.saveStats();
@@ -1740,11 +1819,13 @@ class ShortCircuit {
         if (action === 'versus-back') {
             this.sound.playConfirm();
             window.SCNet?.leave();
+            this.cgLeftRoom();
             this.duel = null;
             this.showTitle();
             return;
         }
         if (action === 'versus-slam') { this.duelSlam(); return; }
+        if (action === 'versus-invite') { this.cgCopyInvite(); return; }
         if (action === 'versus-forfeit') { this.sound.playConfirm(); this.duelForfeit(); return; }
         if (action === 'versus-rematch') {
             const d = this.duel;
