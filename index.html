@@ -2402,6 +2402,53 @@
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
         }
 
+        /* ── lärarens pekpinne: guiden genom första brädet ── */
+        .puzzle-pipe-cell.is-guided {
+            z-index: 3;
+            overflow: visible;      /* cellen klipper annars bort chipet */
+            outline: 2px solid var(--puzzle-accent);
+            outline-offset: 2px;
+            animation: guide-pulse 1.1s ease-in-out infinite;
+        }
+
+        .puzzle-pipe-cell.is-guided::after {
+            content: attr(data-guide);
+            position: absolute;
+            top: calc(-13px * var(--game-scale));
+            left: 50%;
+            z-index: 4;
+            padding: 2px 7px;
+            border-radius: 999px;
+            background: var(--puzzle-accent);
+            color: #06121a;
+            font: 800 max(8px, calc(9px * var(--game-scale))) / 1.4 ui-monospace, monospace;
+            letter-spacing: 0.06em;
+            white-space: nowrap;
+            pointer-events: none;
+            animation: guide-bob 1.1s ease-in-out infinite;
+        }
+
+        .puzzle-pipe-cell.is-guided--swap { outline-color: var(--spark); }
+        .puzzle-pipe-cell.is-guided--swap::after {
+            background: var(--spark);
+            color: #1a1206;
+        }
+
+        @keyframes guide-pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(115, 232, 246, 0.55); }
+            55% { box-shadow: 0 0 15px 5px rgba(115, 232, 246, 0.3); }
+        }
+
+        @keyframes guide-bob {
+            0%, 100% { transform: translate(-50%, 0); }
+            50% { transform: translate(-50%, -3px); }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .puzzle-pipe-cell.is-guided,
+            .puzzle-pipe-cell.is-guided::after { animation: none; }
+        }
+
         /* ── vinstögonblicket ── */
         /* 1 · strömvågen: ljuset rider den färdiga rutten en sista gång,
            cell för cell i ruttens ordning (--fire sätts av renderaren) */
@@ -2600,7 +2647,8 @@
         <h1 class="title-logo"><span class="title-logo__row1">Short</span><b class="title-logo__row2"><span class="title-zap" aria-hidden="true">&#9889;</span>Circuit</b></h1>
         <p class="title-tagline">Route the current before it routes you.</p>
         <div class="title-actions">
-            <button class="menu-button menu-button--primary breaker" type="button" data-action="daily"><i class="breaker-led breaker-led--amber" aria-hidden="true"></i>&#9728; Daily Lock</button>
+            <button id="titleFirst" class="menu-button menu-button--primary breaker" type="button" data-action="first-circuit" hidden><i class="breaker-led breaker-led--amber" aria-hidden="true"></i>&#9889; Your First Circuit</button>
+            <button id="titleDaily" class="menu-button menu-button--primary breaker" type="button" data-action="daily"><i class="breaker-led breaker-led--amber" aria-hidden="true"></i>&#9728; Daily Lock</button>
             <button class="menu-button breaker" type="button" data-action="select"><i class="breaker-led" aria-hidden="true"></i>The 24-Lock Campaign</button>
             <button class="menu-button breaker" type="button" data-action="versus"><i class="breaker-led" aria-hidden="true"></i>&#9889; Live Duel</button>
         </div>

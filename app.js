@@ -84,6 +84,7 @@ class ShortCircuit {
             'screenStats', 'statsBody',
             'screenVersus', 'versusCode', 'versusJoinInput', 'versusStatus',
             'versusHud', 'versusScore', 'versusRival',
+            'titleFirst', 'titleDaily',
             'titleDailyNote', 'muteButton', 'dailyRow', 'campaignRows',
             'puzzleEyebrow', 'puzzleDifficulty', 'puzzleTitle', 'puzzleCopy',
             'puzzleBody', 'puzzleStatus', 'puzzleActions',
@@ -269,7 +270,7 @@ class ShortCircuit {
         if (!panel) return false;
         const items = Array.from(
             panel.querySelectorAll('button:not(:disabled), a[href]')
-        );
+        ).filter(el => el.offsetParent !== null);
         if (!items.length) return false;
         const forward = key === 'ArrowDown' || key === 'ArrowRight';
         const current = items.indexOf(document.activeElement);
@@ -1147,6 +1148,20 @@ class ShortCircuit {
     }
 
     syncTitleNote() {
+        // A player who has never opened a lock gets a warm-up circuit as
+        // the big button; the daily steps back until the ropes are known.
+        const fresh = !this.hasSeenLock();
+        if (this.dom.titleFirst) {
+            this.dom.titleFirst.hidden = !fresh;
+            this.dom.titleDaily.classList.toggle(
+                'menu-button--primary', !fresh
+            );
+        }
+        if (fresh) {
+            this.dom.titleDailyNote.textContent =
+                'New in the box? The first circuit shows you every move.';
+            return;
+        }
         const info = this.getDailyInfo();
         const days = `${info.streak} day${info.streak === 1 ? '' : 's'}`;
         this.dom.titleDailyNote.textContent = info.solvedToday ?
@@ -1468,6 +1483,7 @@ class ShortCircuit {
             }
             return;
         }
+        if (action === 'first-circuit') { this.startLock(1); return; }
         if (action === 'daily') { this.startDaily(); return; }
         if (action === 'start-lock') {
             this.startLock(Number(button.dataset.value));
@@ -1693,6 +1709,100 @@ class ShortCircuit {
         );
     }
 
+    /**
+     * The IN→OUT positions of the intended solution, walked on a virtual
+     * board where every conductor sits at its solutionIndex. Cells only
+     * ever swap (never rotate), so connections are intrinsic to each
+     * cell and the trace is exact.
+     */
+    solutionRoute(state) {
+        if (this.routeCache?.state === state) return this.routeCache.route;
+        const solved = state.cells.map((unused, position) =>
+            state.cells.find(cell => cell.solutionIndex === position));
+        if (solved.some(cell => !cell)) return null;
+        const steps = [
+            { x: 0, y: -1 }, { x: 1, y: 0 }, { x: 0, y: 1 }, { x: -1, y: 0 },
+        ];
+        const route = [];
+        const visited = new Set();
+        let heads = [{ index: state.sourceY * state.size, incoming: 3 }];
+        for (let pass = 0; pass < state.cells.length && heads.length; pass++) {
+            const next = [];
+            for (const head of heads) {
+                if (visited.has(head.index)) return null;
+                visited.add(head.index);
+                route.push(head.index);
+                const connections =
+                    this.engine.getPipeConnections(solved[head.index]);
+                if (!connections[head.incoming]) return null;
+                const x = head.index % state.size;
+                const y = Math.floor(head.index / state.size);
+                for (let dir = 0; dir < 4; dir++) {
+                    if (!connections[dir] || dir === head.incoming) continue;
+                    if (
+                        x === state.size - 1 && dir === 1 &&
+                        state.sinks.includes(head.index)
+                    ) continue;
+                    const nx = x + steps[dir].x;
+                    const ny = y + steps[dir].y;
+                    if (nx < 0 || nx >= state.size ||
+                        ny < 0 || ny >= state.size) return null;
+                    next.push({
+                        index: ny * state.size + nx,
+                        incoming: (dir + 2) % 4,
+                    });
+                }
+            }
+            heads = next;
+        }
+        this.routeCache = { state, route };
+        return route;
+    }
+
+    /**
+     * The teacher's pointer: on the very first board, the exact next
+     * cell to press — uncover the route, then each swap pair — until
+     * the circuit closes and the current takes over.
+     */
+    teachingGuide(state) {
+        if (!state?.teaching || state.solved) return null;
+        if (state.phase === 'failed' || state.flowPhase === 'failed') {
+            return null;
+        }
+        let route;
+        try {
+            route = this.solutionRoute(state);
+        } catch {
+            return null;      // guiden får aldrig fälla brädet
+        }
+        if (!route) return null;
+        for (const position of route) {
+            const resident = state.cells[position];
+            if (!resident.revealed) {
+                return { stage: 'uncover', targets: [position] };
+            }
+            if (resident.welded || resident.solutionIndex === position) {
+                continue;
+            }
+            const from = state.cells.findIndex(cell =>
+                cell.solutionIndex === position && !cell.welded);
+            if (from < 0) return null;
+            if (!state.cells[from].revealed) {
+                return { stage: 'uncover', targets: [from] };
+            }
+            if (state.selectedIndex === position ||
+                state.selectedIndex === from) {
+                return {
+                    stage: 'swap',
+                    targets: [state.selectedIndex === position ?
+                        from : position],
+                };
+            }
+            return { stage: 'swap', targets: [from, position] };
+        }
+        return { stage: 'watch', targets: [] };
+    }
+
     renderPuzzle(state) {
         const duel = this.duel;
         this.dom.puzzleEyebrow.textContent = duel ? 'Live duel' :
@@ -1860,6 +1970,20 @@ class ShortCircuit {
             this.pipeCells[index] = button;
         });
         this.weldRefusalRendered = state.refusalTick;
+
+        const guide = this.teachingGuide(state);
+        if (guide) {
+            guide.targets.forEach(index => {
+                const cell = this.pipeCells[index];
+                if (!cell) return;
+                cell.classList.add('is-guided');
+                cell.classList.toggle(
+                    'is-guided--swap', guide.stage === 'swap'
+                );
+                cell.dataset.guide =
+                    guide.stage === 'swap' ? 'SWAP' : 'TAP';
+            });
+        }
 
         // Solved: the win wave rides the route order — each cell knows
         // when it is its turn to flare.
