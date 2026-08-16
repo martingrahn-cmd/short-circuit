@@ -430,7 +430,7 @@ class ShortCircuit {
         const game = cgSdk()?.game;
         if (!d?.code || !game?.inviteLink) return;
         try {
-            const link = await Promise.resolve(
+            const link = this.duelInviteLink ?? await Promise.resolve(
                 game.inviteLink({ roomId: d.code })
             );
             try { await navigator.clipboard.writeText(link); } catch { }
@@ -499,6 +499,15 @@ class ShortCircuit {
             this.dom.versusCode.hidden = false;
             this.dom.versusInvite.hidden = !cgSdk()?.game?.inviteLink;
             this.cgRoom(true);
+            // Mint the invite link the moment the room exists: the copy
+            // button answers instantly, and the platform sees the API in
+            // use as soon as anyone hosts.
+            this.duelInviteLink = null;
+            try {
+                Promise.resolve(cgSdk()?.game?.inviteLink?.({ roomId: code }))
+                    .then(link => { this.duelInviteLink = link ?? null; })
+                    .catch(() => { /* optional */ });
+            } catch { /* optional */ }
             this.dom.versusStatus.textContent =
                 'Share the code — waiting for a rival…';
         }).catch(() => {
