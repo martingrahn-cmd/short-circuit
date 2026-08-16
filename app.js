@@ -1258,6 +1258,7 @@ class ShortCircuit {
         } catch { /* optional */ }
         this.renderWon();
         this.setScreen('won');
+        this.celebrateBackdrop();
         // Keyboard players chain locks on Enter alone.
         if (this.usesKeyboard) this.focusPrimary();
         return true;
@@ -1358,7 +1359,7 @@ class ShortCircuit {
         const previousPhase = state.flowPhase;
 
         if (this.engine.update(dt)) {
-            this.complete();
+            this.startWinHold();
             return;
         }
         if (state.filled.size > previousFill) this.sound.playCircuitStep();
@@ -1389,6 +1390,42 @@ class ShortCircuit {
             this.syncFlow(state);
             this.dom.puzzleStatus.textContent = state.status;
         }
+    }
+
+    /**
+     * The last act of a solved board: the light races the finished route
+     * one more time while the engine's completion timer runs, and the
+     * won screen holds off until the wave has landed.
+     */
+    startWinHold() {
+        if (this.winPending) return true;
+        this.winPending = true;
+        setTimeout(() => {
+            this.winPending = false;
+            try {
+                this.complete();
+            } catch (err) {
+                scFault('win-hold', err);
+            }
+        }, this.reducedMotion || this.duel ? 0 : 420);
+        return true;
+    }
+
+    /** Arcs and spark bursts behind the won panel: the box celebrates. */
+    celebrateBackdrop() {
+        if (this.reducedMotion || !this.bgCanvas) return;
+        const w = this.bgCanvas.width;
+        const h = this.bgCanvas.height;
+        [0, 260, 620].forEach(delay => setTimeout(() => {
+            if (this.screen === 'won') this.spawnArc();
+        }, delay));
+        [90, 340, 560, 830].forEach(delay => setTimeout(() => {
+            if (this.screen !== 'won') return;
+            this.spawnSparks(
+                w * (0.15 + Math.random() * 0.7),
+                h * (0.1 + Math.random() * 0.3)
+            );
+        }, delay));
     }
 
     // ── actions ──
@@ -1823,6 +1860,16 @@ class ShortCircuit {
             this.pipeCells[index] = button;
         });
         this.weldRefusalRendered = state.refusalTick;
+
+        // Solved: the win wave rides the route order — each cell knows
+        // when it is its turn to flare.
+        if (state.solved) {
+            (state.trail || []).forEach((entry, order) => {
+                this.pipeCells[entry.index]?.style.setProperty(
+                    '--fire', String(order)
+                );
+            });
+        }
 
         const inTerminal = document.createElement('span');
         inTerminal.className =
